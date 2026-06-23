@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+data/
+_lessons_text/
+.ipynb_checkpoints/
+
+charts/
+
+models/
+
+# copyrighted third-party course material — keep out of the public repo
+_course_v2/
+_lessons_text/
+
+# runtime output
+alerts.log
