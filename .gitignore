@@ -1,7 +1,7 @@
 .venv/
 __pycache__/
 *.pyc
-data/
+/data/
 _lessons_text/
 .ipynb_checkpoints/
 
