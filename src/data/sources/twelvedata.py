@@ -36,7 +36,10 @@ def fetch_ohlcv(pair: str, tf: str, outputsize: int = 5000) -> pd.DataFrame:
     df["time"] = pd.to_datetime(df["datetime"])
     for c in ("open", "high", "low", "close"):
         df[c] = df[c].astype(float)
-    df["volume"] = pd.to_numeric(df.get("volume", 0), errors="coerce").fillna(0.0)
+    if "volume" in df.columns:
+        df["volume"] = pd.to_numeric(df["volume"], errors="coerce").fillna(0.0)
+    else:
+        df["volume"] = 0.0          # forex has no volume from Twelve Data
     df = df.set_index("time")[["open", "high", "low", "close", "volume"]].sort_index()
     df.index.name = "time"
     return df
