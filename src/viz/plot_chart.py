@@ -20,7 +20,7 @@ from matplotlib.patches import Rectangle
 
 import config
 from src.data.fetch import load
-from src.detectors import rejection, snr
+from src.detectors import rejection, smc, snr
 from src.detectors.structure import analyze
 
 CHARTS_DIR = config.ROOT / "charts"
@@ -98,11 +98,34 @@ def plot(pair: str, timeframe: str, bars: int, left: int, right: int) -> str:
             ax.scatter(x, view["high"].iat[x] + (ymax - ymin) * 0.012, marker="v",
                        s=26, color="#c62828", zorder=5)
 
+    # --- SMC POIs: order blocks, FVGs, liquidity sweeps (recent + unmitigated) ---
+    OB_BULL, OB_BEAR, FVG_C, SWP = "#1b5e20", "#b71c1c", "#f9a825", "#6a1b9a"
+    obs = [o for o in smc.order_blocks(full, left, right)
+           if o.idx >= start and o.mitigated_idx is None and ymin <= o.bottom <= ymax][-5:]
+    for ob in obs:
+        x0 = pos[ob.idx]
+        col = OB_BULL if ob.kind == "bullish" else OB_BEAR
+        ax.add_patch(Rectangle((x0, ob.bottom), n - x0, ob.top - ob.bottom, facecolor=col,
+                               alpha=0.09, edgecolor=col, lw=0.7, ls=":", zorder=1))
+        ax.annotate("OB", (x0, ob.top), fontsize=6.5, color=col, fontweight="bold")
+    fvgs = [f for f in smc.fair_value_gaps(full)
+            if f.idx >= start and f.mitigated_idx is None and ymin <= f.bottom <= ymax][-5:]
+    for f in fvgs:
+        x0 = pos[f.idx]
+        ax.add_patch(Rectangle((x0, f.bottom), min(10, n - x0), f.top - f.bottom,
+                               facecolor=FVG_C, alpha=0.18, edgecolor=FVG_C, lw=0.5, zorder=1))
+        ax.annotate("FVG", (x0, f.top), fontsize=6, color="#9c6f00")
+    for sw in [s for s in smc.liquidity_sweeps(full, left, right) if s.idx >= start][-8:]:
+        x = pos[sw.idx]
+        ax.scatter(x, sw.level, marker="x", s=32, color=SWP, zorder=5, linewidths=1.4)
+        ax.annotate(sw.direction.upper(), (x, sw.level), textcoords="offset points",
+                    xytext=(3, 2), fontsize=6, color=SWP, fontweight="bold")
+
     ticks = range(0, n, max(1, n // 12))
     ax.set_xticks(list(ticks))
     ax.set_xticklabels([view["time"].iloc[t].strftime("%Y-%m-%d") for t in ticks],
                        rotation=45, fontsize=8)
-    ax.set_title(f"{pair} {timeframe} — SNR zones + structure + rejections")
+    ax.set_title(f"{pair} {timeframe} — SNR · structure · rejections · OB/FVG · liquidity sweeps")
     ax.set_ylabel("price")
     ax.margins(x=0.01)
     ax.grid(True, alpha=0.12)

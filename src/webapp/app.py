@@ -307,22 +307,47 @@ def api_journal():
     return jsonify({"rows": journal.recent(int(request.args.get("n", 60)))})
 
 
-@app.route("/api/tick", methods=["POST", "OPTIONS"])
-def api_tick():
-    if request.method == "OPTIONS":
-        return ("", 204)
-    refresh = request.values.get("refresh") == "1"
+def _run_and_cache(refresh: bool) -> dict:
+    """Run one engine tick (scan → trade → learn), cache results for the dashboard."""
+    import datetime as _dt
     st = engine.tick(BROKER, TF, BIAS_TF, TARGET_R, refresh=refresh)
     SEED["state"] = "ready"                       # a successful tick means we're seeded
     _OVERVIEW_CACHE["t"] = 0.0                     # force overview refresh
-    import datetime as _dt
-    sigs = sorted(_scan_only(), key=lambda s: -s.get("conf", 0))
-    st["signals"] = sigs[:20]
+    st["signals"] = sorted(_scan_only(), key=lambda s: -s.get("conf", 0))[:20]
     st["overview"] = _overview()
     st["seed_state"] = SEED["state"]
     st["when"] = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     LAST_TICK.write_text(json.dumps(st, indent=2, default=str))
-    return jsonify(st)
+    return st
+
+
+@app.route("/api/tick", methods=["POST", "OPTIONS"])
+def api_tick():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    return jsonify(_run_and_cache(request.values.get("refresh") == "1"))
+
+
+# --- autonomous scheduler: tick on an interval so it trades & learns on its own ---
+TICK_INTERVAL = int(os.environ.get("TICK_INTERVAL", "3600"))   # seconds; 0 disables
+_sched_started = [False]
+
+
+def _scheduler() -> None:
+    while True:
+        time.sleep(max(60, TICK_INTERVAL))
+        try:
+            _run_and_cache(refresh=True)
+            print("[scheduler] autonomous tick done")
+        except Exception as e:  # noqa: BLE001
+            print(f"[scheduler] tick error: {e}")
+
+
+def _start_scheduler() -> None:
+    if TICK_INTERVAL > 0 and not _sched_started[0]:
+        _sched_started[0] = True
+        threading.Thread(target=_scheduler, daemon=True).start()
+        print(f"[scheduler] autonomous ticks every {TICK_INTERVAL}s")
 
 
 _DATA_CACHE = {"t": 0.0, "data": None}
@@ -470,6 +495,9 @@ def api_chart():
         return send_file(path, mimetype="image/png")
     except Exception as e:  # noqa: BLE001
         return (str(e), 500)
+
+
+_start_scheduler()   # begin autonomous ticking (set TICK_INTERVAL=0 to disable)
 
 
 if __name__ == "__main__":
