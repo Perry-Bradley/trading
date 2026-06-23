@@ -7,11 +7,24 @@ fails (e.g. rate limit), the caller falls back to yfinance.
 from __future__ import annotations
 
 import os
+import time
 
 import pandas as pd
 import requests
 
 INTERVAL = {"D1": "1day", "H4": "4h", "H1": "1h", "M30": "30min"}
+
+# Free tier allows ~8 requests/min; keep >=8s between calls so a full seed of all
+# forex pairs succeeds instead of getting rate-limited (429) and falling back.
+_MIN_SPACING = 8.0
+_last_call = [0.0]
+
+
+def _throttle() -> None:
+    wait = _MIN_SPACING - (time.time() - _last_call[0])
+    if wait > 0:
+        time.sleep(wait)
+    _last_call[0] = time.time()
 
 
 def available() -> bool:
@@ -29,6 +42,7 @@ def fetch_ohlcv(pair: str, tf: str, outputsize: int = 5000) -> pd.DataFrame:
     url = ("https://api.twelvedata.com/time_series"
            f"?symbol={_symbol(pair)}&interval={INTERVAL[tf]}"
            f"&outputsize={outputsize}&apikey={key}&format=JSON")
+    _throttle()
     j = requests.get(url, timeout=30).json()
     if "values" not in j:
         raise RuntimeError(f"twelvedata: {j.get('message', j)}")
