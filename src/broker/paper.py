@@ -17,8 +17,9 @@ import config
 from src.broker.base import Broker, Position
 from src.data import fetch
 
-COST_PIPS = {"EURUSD": 1.2, "GBPUSD": 1.5, "AUDUSD": 1.5,
-             "EURNZD": 3.0, "CHFJPY": 2.0, "BTCUSD": 25.0}
+COST_PIPS = {"EURUSD": 1.2, "GBPUSD": 1.5, "AUDUSD": 1.5, "NZDUSD": 1.8,
+             "USDJPY": 1.5, "USDCAD": 1.8, "EURNZD": 3.0, "EURJPY": 2.0,
+             "GBPJPY": 2.5, "CHFJPY": 2.0, "XAUUSD": 3.0, "BTCUSD": 25.0}
 
 
 class PaperBroker(Broker):

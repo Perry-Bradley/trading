@@ -96,6 +96,19 @@ export default function Pairs() {
           </Section>
 
           <div className="grid lg:grid-cols-2 gap-4">
+            <Section title="Quasimodo (QML) — premium reversals">
+              {a.quasimodos.length === 0 ? <p className="text-sub text-sm">none recently</p> : (
+                <ul className="space-y-1.5">
+                  {a.quasimodos.map((q, i) => (
+                    <li key={i} className="flex items-center justify-between text-sm">
+                      <span className={`font-semibold ${q.kind === "bullish" ? "text-up" : "text-down"}`}>{q.kind} QM</span>
+                      <span className="font-mono text-xs text-sub">sweep {fmtPrice(q.sweep)} → CHoCH {fmtPrice(q.choch)} · {q.time}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Section>
+            <Section title="Breaker blocks"><ZoneList items={a.breakers} /></Section>
             <Section title="Structure (BOS / CHoCH)">
               {a.breaks.length === 0 ? <p className="text-sub text-sm">none</p> : (
                 <ul className="space-y-1.5">

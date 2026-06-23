@@ -17,7 +17,8 @@ MODELS_DIR.mkdir(parents=True, exist_ok=True)
 # Includes the user's original screenshots' pairs + NZDUSD + BTCUSD.
 PAIRS = [
     "EURUSD", "GBPUSD", "AUDUSD", "NZDUSD", "USDJPY", "USDCAD",   # majors
-    "EURNZD", "EURJPY", "GBPJPY", "CHFJPY",                       # liquid crosses
+    "EURJPY", "GBPJPY", "CHFJPY",                                 # liquid crosses
+    "XAUUSD",                                                     # gold (key SMC instrument)
     "BTCUSD",                                                     # crypto
 ]
 
@@ -32,10 +33,10 @@ YF_TICKERS = {
     "NZDUSD": "NZDUSD=X",
     "USDJPY": "USDJPY=X",
     "USDCAD": "USDCAD=X",
-    "EURNZD": "EURNZD=X",
     "EURJPY": "EURJPY=X",
     "GBPJPY": "GBPJPY=X",
     "CHFJPY": "CHFJPY=X",
+    "XAUUSD": "GC=F",        # gold futures (yfinance); Twelve Data uses XAU/USD spot
     "BTCUSD": "BTC-USD",
 }
 
@@ -55,4 +56,6 @@ TIMEFRAMES = {
 def pip_size(pair: str) -> float:
     if pair in CRYPTO:
         return 1.0
+    if pair == "XAUUSD":
+        return 0.1            # gold: 1 pip = 0.1
     return 0.01 if pair.endswith("JPY") else 0.0001

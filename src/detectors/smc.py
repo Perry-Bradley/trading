@@ -37,6 +37,15 @@ class Sweep:
     level: float         # the swing level that was swept
 
 
+@dataclass
+class Quasimodo:
+    kind: str            # bullish / bearish
+    idx: int             # bar of the confirming CHoCH
+    time: pd.Timestamp
+    sweep_level: float   # the liquidity that was grabbed (the "head")
+    choch_level: float   # the structure level the move then broke (commitment)
+
+
 def order_blocks(df: pd.DataFrame, left: int = 3, right: int = 3, lookback: int = 10) -> list[Zone]:
     """Order blocks anchored to structure breaks."""
     res = analyze(df, left, right)
@@ -108,6 +117,60 @@ def liquidity_sweeps(df: pd.DataFrame, left: int = 3, right: int = 3) -> list[Sw
         if last_sl is not None and lows[b] < last_sl and closes[b] > last_sl:
             sweeps.append(Sweep("ssl", b, df.index[b], float(last_sl)))
     return sweeps
+
+
+def breaker_blocks(df: pd.DataFrame, left: int = 3, right: int = 3, lookback: int = 10) -> list[Zone]:
+    """Breaker blocks (Lesson 8): an order block that price BREAKS through and then
+    RETESTS — it flips polarity and acts as the opposite zone.
+
+    A bullish OB (demand) broken downward becomes resistance (a bearish breaker);
+    a bearish OB (supply) broken upward becomes support (a bullish breaker).
+    """
+    obs = order_blocks(df, left, right, lookback)
+    c = df["close"].to_numpy()
+    h = df["high"].to_numpy()
+    l = df["low"].to_numpy()
+    n = len(df)
+    breakers: list[Zone] = []
+    for ob in obs:
+        violated = None
+        for b in range(ob.idx + 1, n):
+            if ob.kind == "bullish" and c[b] < ob.bottom:      # demand broken down
+                violated = b; break
+            if ob.kind == "bearish" and c[b] > ob.top:         # supply broken up
+                violated = b; break
+        if violated is None:
+            continue
+        retest = None
+        for b in range(violated + 1, n):
+            if h[b] >= ob.bottom and l[b] <= ob.top:
+                retest = b; break
+        flipped = "bearish" if ob.kind == "bullish" else "bullish"
+        breakers.append(Zone(flipped, ob.top, ob.bottom, ob.idx, ob.time,
+                             ref_idx=violated, mitigated_idx=retest))
+    return breakers
+
+
+def quasimodos(df: pd.DataFrame, left: int = 3, right: int = 3, window: int = 6) -> list[Quasimodo]:
+    """Quasimodo / QML (Lesson 8 & 17): the premium reversal — a liquidity sweep
+    (the 'head') immediately followed by a Change of Character against it.
+
+    Bearish QM: buy-side liquidity swept (highs grabbed), then a CHoCH down.
+    Bullish QM: sell-side liquidity swept (lows grabbed), then a CHoCH up.
+    These align with the OB→Breaker→QML idea and are the method's highest-conviction
+    reversal points when they also agree with HTF bias.
+    """
+    sweeps = liquidity_sweeps(df, left, right)
+    chochs = [b for b in analyze(df, left, right)["breaks"] if b.kind == "CHoCH"]
+    out: list[Quasimodo] = []
+    for ch in chochs:
+        want = "bsl" if ch.direction == "down" else "ssl"   # opposite-side grab before the flip
+        sw = next((s for s in sweeps if s.direction == want and 0 <= ch.idx - s.idx <= window), None)
+        if sw is None:
+            continue
+        out.append(Quasimodo("bearish" if ch.direction == "down" else "bullish",
+                             ch.idx, ch.time, sw.level, ch.level))
+    return out
 
 
 def _mitigation(df: pd.DataFrame, zones: list[Zone]) -> None:

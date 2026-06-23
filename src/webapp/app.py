@@ -26,7 +26,7 @@ from src import engine
 app = Flask(__name__)
 LAST_TICK = config.DATA_DIR / "last_tick.json"
 
-TARGET_R = float(os.environ.get("TARGET_R", "2"))
+TARGET_R = float(os.environ.get("TARGET_R", "3"))   # MSNR is high-R:R; 3R default (set 5 for 5:1)
 TF = os.environ.get("TF", "H4")
 BIAS_TF = os.environ.get("BIAS_TF", "D1")
 BROKER = os.environ.get("BROKER", "paper")
@@ -217,9 +217,9 @@ def _scan_only() -> list:
     out = []
     for pr in config.PAIRS:
         try:
-            # scan a wider recent window so the page shows recent setups (each tagged
-            # with its time), not only triggers on the last 3 bars.
-            for s in backtest.signals(pr, TF, BIAS_TF, TARGET_R, lookback=40):
+            # only the most recent bars so the page shows fresh (hours-old) setups,
+            # not multi-day-old ones. ~12 H4 bars ≈ the last ~2 days.
+            for s in backtest.signals(pr, TF, BIAS_TF, TARGET_R, lookback=12):
                 p = pol.proba(vec(s["features"]))
                 s["conf"], s["size"] = p, pol.size(p)
                 s["time"] = str(s.get("time", ""))[:16]
@@ -229,8 +229,7 @@ def _scan_only() -> list:
                                               "tf", "time", "age_bars")})
         except Exception:  # noqa: BLE001
             continue
-        except Exception:  # noqa: BLE001
-            continue
+    out.sort(key=lambda s: s.get("age_bars", 999))   # freshest first
     return out
 
 
@@ -334,6 +333,17 @@ _sched_started = [False]
 
 
 def _scheduler() -> None:
+    # Wait for data+model to be seeded, then run an IMMEDIATE first tick so the
+    # dashboard fills in right after deploy (instead of waiting a whole interval).
+    for _ in range(180):
+        if _seeded():
+            break
+        time.sleep(5)
+    try:
+        _run_and_cache(refresh=True)
+        print("[scheduler] initial tick done")
+    except Exception as e:  # noqa: BLE001
+        print(f"[scheduler] initial tick error: {e}")
     while True:
         time.sleep(max(60, TICK_INTERVAL))
         try:
@@ -473,9 +483,13 @@ def api_analysis():
              "time": str(f.time)[:16]} for f in smc.fair_value_gaps(df)[-6:]][::-1]
     sweeps = [{"side": "BSL" if s.direction == "bsl" else "SSL", "level": round(s.level, 5),
                "time": str(s.time)[:16]} for s in smc.liquidity_sweeps(df)[-6:]][::-1]
+    breakers = [{"kind": b.kind, "top": round(b.top, 5), "bottom": round(b.bottom, 5),
+                 "time": str(b.time)[:16]} for b in smc.breaker_blocks(df)[-6:]][::-1]
+    qms = [{"kind": q.kind, "sweep": round(q.sweep_level, 5), "choch": round(q.choch_level, 5),
+            "time": str(q.time)[:16]} for q in smc.quasimodos(df)[-6:]][::-1]
     out = {"pair": pair, "tf": TF, "bias_tf": BIAS_TF, "price": round(float(df["close"].iat[-1]), 5),
            "bias": bias, "breaks": breaks, "fresh_snr": fresh, "order_blocks": obs,
-           "fvgs": fvgs, "sweeps": sweeps}
+           "fvgs": fvgs, "sweeps": sweeps, "breakers": breakers, "quasimodos": qms}
     _ANALYSIS_CACHE[pair] = (time.time(), out)
     return jsonify(out)
 

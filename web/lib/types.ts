@@ -97,9 +97,11 @@ export type BacktestRow = {
 export type Zone = { kind: string; top: number; bottom: number; time: string };
 export type Brk = { type: string; dir: string; level: number; time: string };
 export type Sweep = { side: string; level: number; time: string };
+export type QM = { kind: string; sweep: number; choch: number; time: string };
 export type Analysis = {
   pair: string; tf: string; bias_tf: string; price: number; bias: string;
   breaks: Brk[]; fresh_snr: Zone[]; order_blocks: Zone[]; fvgs: Zone[]; sweeps: Sweep[];
+  breakers: Zone[]; quasimodos: QM[];
   seed_state?: string;
 };
 
