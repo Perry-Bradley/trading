@@ -59,8 +59,10 @@ class OnlinePolicy:
         self.gain = gain
         self.max_size = max_size
         self.scaler = StandardScaler()
-        self.clf = SGDClassifier(loss="log_loss", alpha=alpha,
-                                 learning_rate=learning_rate, eta0=eta0, random_state=0)
+        clf_kw = dict(loss="log_loss", alpha=alpha, learning_rate=learning_rate, random_state=0)
+        if learning_rate != "optimal":     # eta0 must be > 0 and is only used by these schedules
+            clf_kw["eta0"] = eta0 if eta0 and eta0 > 0 else 0.01
+        self.clf = SGDClassifier(**clf_kw)
         self.cw = {0: 1.0, 1: 1.0}
         self.n_updates = 0          # how many live trades it has learned from
         self._ready = False
