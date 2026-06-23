@@ -76,7 +76,7 @@ export type ModelInfo = {
 
 export type TFInfo = { bars: number; start: string; end: string } | null;
 export type DataInfo = {
-  pairs: { pair: string; tf: Record<string, TFInfo> }[];
+  pairs: { pair: string; tf: Record<string, TFInfo>; source?: string; live?: boolean }[];
   timeframes: string[];
   ladder: string;
   source: string;

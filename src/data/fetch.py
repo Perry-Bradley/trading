@@ -69,30 +69,53 @@ def _resample_h4(h1: pd.DataFrame) -> pd.DataFrame:
     return h1.resample("4h").agg({c: agg[c] for c in cols}).dropna(subset=["open"])
 
 
+def _fetch_yf(pair: str, timeframe: str) -> pd.DataFrame:
+    """yfinance source (delayed ~15 min; the no-key fallback)."""
+    ticker = config.YF_TICKERS[pair]
+    spec = config.TIMEFRAMES[timeframe]
+    df = yf.download(ticker, interval=spec["yf_interval"], period=spec["yf_period"],
+                     auto_adjust=False, progress=False)
+    if df is None or df.empty:
+        raise RuntimeError(f"No data returned for {pair} {timeframe} ({ticker})")
+    df = _flatten(df)
+    if timeframe == "H4":
+        df = _resample_h4(df)        # yfinance has no native 4h
+    return _sanitize(df)
+
+
+def source_for(pair: str) -> str:
+    """Which live source handles this pair (for display / docs)."""
+    if pair in config.CRYPTO:
+        return "binance"
+    from src.data.sources import twelvedata
+    return "twelvedata" if twelvedata.available() else "yfinance"
+
+
 def fetch(pair: str, timeframe: str) -> pd.DataFrame:
+    """Route to the best available source, falling back to yfinance on any failure.
+
+    crypto  -> Binance (real-time, no key)
+    forex   -> Twelve Data if TWELVEDATA_KEY set, else yfinance (delayed)
+    """
     if pair not in config.YF_TICKERS:
         raise ValueError(f"Unknown pair {pair!r}. Known: {list(config.YF_TICKERS)}")
     if timeframe not in config.TIMEFRAMES:
         raise ValueError(f"Unknown timeframe {timeframe!r}. Known: {list(config.TIMEFRAMES)}")
 
-    ticker = config.YF_TICKERS[pair]
-    spec = config.TIMEFRAMES[timeframe]
-
-    df = yf.download(
-        ticker,
-        interval=spec["yf_interval"],
-        period=spec["yf_period"],
-        auto_adjust=False,
-        progress=False,
-    )
-    if df is None or df.empty:
-        raise RuntimeError(f"No data returned for {pair} {timeframe} ({ticker})")
-
-    df = _flatten(df)
-    if timeframe == "H4":
-        df = _resample_h4(df)
-    df = _sanitize(df)
-    return df
+    if pair in config.CRYPTO:
+        try:
+            from src.data.sources import binance
+            return _sanitize(binance.fetch_ohlcv(pair, timeframe))
+        except Exception as e:  # noqa: BLE001
+            print(f"    (binance {pair} {timeframe} failed: {e}; using yfinance)")
+    else:
+        from src.data.sources import twelvedata
+        if twelvedata.available():
+            try:
+                return _sanitize(twelvedata.fetch_ohlcv(pair, timeframe))
+            except Exception as e:  # noqa: BLE001
+                print(f"    (twelvedata {pair} {timeframe} failed: {e}; using yfinance)")
+    return _fetch_yf(pair, timeframe)
 
 
 def save(pair: str, timeframe: str) -> pd.DataFrame:

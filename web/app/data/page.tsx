@@ -20,18 +20,30 @@ export default function DataPage() {
         detectors, backtester and model all read from.
       </p>
 
+      {d && d.pairs.some((p) => !p.live) && (
+        <div className="p-3 rounded-xl bg-warn/5 border border-warn/30 text-warn text-sm">
+          Forex pairs show <b>yfinance (delayed ~15 min)</b> because no Twelve Data key is set.
+          For <b>live forex</b>: grab a free key at twelvedata.com, then set <code className="bg-canvas px-1 rounded">TWELVEDATA_KEY</code>
+          on the API service and redeploy. Crypto (Binance) is already live, no key needed.
+        </div>
+      )}
       <Section title="Coverage" right={<span className="text-sub text-xs">{d?.pairs.length ?? 0} pairs · {d?.timeframes.length ?? 0} timeframes</span>}>
         {!d ? <p className="text-sub text-sm py-2">Loading…</p> : (
           <div className="scroll-x">
-            <table className="w-full text-sm min-w-[680px]">
+            <table className="w-full text-sm min-w-[760px]">
               <thead><tr className="text-sub text-xs text-left border-b border-line">
-                <th className="py-2 pr-3">Pair</th>
+                <th className="py-2 pr-3">Pair</th><th className="pr-3">Source</th>
                 {d.timeframes.map((t) => <th key={t} className="pr-3">{t}</th>)}
               </tr></thead>
               <tbody>
                 {d.pairs.map((p) => (
                   <tr key={p.pair} className="border-b border-line/70">
                     <td className="py-2.5 pr-3 font-semibold">{p.pair}</td>
+                    <td className="pr-3">
+                      <span className={`text-[11px] px-2 py-0.5 rounded-full ${p.live ? "bg-up/10 text-up" : "bg-line text-sub"}`}>
+                        {p.source}{p.live ? " · live" : " · delayed"}
+                      </span>
+                    </td>
                     {d.timeframes.map((t) => {
                       const c = p.tf[t];
                       return (

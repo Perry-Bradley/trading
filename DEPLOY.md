@@ -52,6 +52,14 @@ The app is **two services**: a Python **API** (`src/webapp/app.py`) and a Next.j
 3. Variables: `TARGET_R=2`, `TF=H4`, `BIAS_TF=D1`, `BROKER=paper`
    (+ `TELEGRAM_*` / `MT5_*` if used). Optional: `LEARNING_RATE`, `ETA0`.
 
+### Live data sources
+- **Crypto (BTCUSD)** → **Binance**, real-time, **no key** (uses the public
+  `data-api.binance.vision` mirror). Live out of the box.
+- **Forex** → **Twelve Data** when `TWELVEDATA_KEY` is set (free key at
+  twelvedata.com), otherwise **yfinance (delayed ~15 min)**. To go live on forex:
+  set `TWELVEDATA_KEY` on the API service and redeploy. The Data page shows each
+  pair's source and whether it's live or delayed.
+
 **Service 2 — dashboard (Next.js)**
 4. **New service → same repo**, set **Root Directory = `web`** (Railway auto-detects
    Next.js: `npm install` + `npm run build` + `npm start`).

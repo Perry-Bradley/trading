@@ -334,6 +334,7 @@ def api_data():
     if time.time() - _DATA_CACHE["t"] < 300 and _DATA_CACHE["data"]:
         return jsonify(_DATA_CACHE["data"])
     import pandas as pd
+    from src.data import fetch as _fetch
     rows = []
     for pr in config.PAIRS:
         tfs = {}
@@ -348,7 +349,9 @@ def api_data():
                     tfs[tf] = None
             else:
                 tfs[tf] = None
-        rows.append({"pair": pr, "tf": tfs})
+        src = _fetch.source_for(pr)
+        live = src in ("binance", "twelvedata")
+        rows.append({"pair": pr, "tf": tfs, "source": src, "live": live})
     out = {"pairs": rows, "timeframes": list(config.TIMEFRAMES),
            "ladder": "D1->H4->H1->M30", "source": "yfinance", "seed_state": SEED["state"]}
     _DATA_CACHE.update(t=time.time(), data=out)
