@@ -46,8 +46,10 @@ def build(target_r: float = 2.0, configs: list[tuple[str, str]] | None = None,
                     "win": 1 if t.outcome == "win" else 0,
                 })
                 rows.append(row)
-    df = pd.DataFrame(rows).sort_values("entry_time").reset_index(drop=True)
-    return df
+    df = pd.DataFrame(rows)
+    if df.empty:                      # no data fetched yet -> caller handles it
+        return df
+    return df.sort_values("entry_time").reset_index(drop=True)
 
 
 FEATURES = [

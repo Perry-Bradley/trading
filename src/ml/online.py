@@ -110,6 +110,11 @@ class OnlinePolicy:
     def bootstrap(cls, target_r: float = 2.0, save: bool = True, **kw) -> "OnlinePolicy":
         """Warm-start a fresh policy on ALL historical setups (the foundation)."""
         df = build(target_r=target_r)
+        if df.empty:
+            raise RuntimeError(
+                "No setups to bootstrap from — fetch data first "
+                "(run a tick with refresh, or `python -m src.data.fetch --all`)."
+            )
         X = df[FEATURES].to_numpy(dtype=float)
         y = df["win"].to_numpy(dtype=int)
         pol = cls(target_r, **kw)

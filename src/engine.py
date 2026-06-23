@@ -26,14 +26,18 @@ from src.notify import notify
 def tick(broker_kind: str = "paper", tf: str = "H4", bias_tf: str = "D1",
          target_r: float = 2.0, min_conf: float | None = None,
          lookback: int = 3, refresh: bool = False) -> dict:
-    if refresh:
+    # Auto-seed: on a fresh deploy there's no committed data, so the first tick
+    # must fetch before it can bootstrap the model.
+    have_data = ((config.DATA_DIR / f"{config.PAIRS[0]}_{tf}.parquet").exists()
+                 and (config.DATA_DIR / f"{config.PAIRS[0]}_{bias_tf}.parquet").exists())
+    if refresh or not have_data:
         from src.data import fetch
         for pr in config.PAIRS:
             for t in {tf, bias_tf}:
                 try:
                     fetch.save(pr, t)
                 except Exception as e:  # noqa: BLE001
-                    print(f"  (refresh {pr} {t} failed: {e})")
+                    print(f"  (fetch {pr} {t} failed: {e})")
 
     policy = OnlinePolicy.load_or_bootstrap(target_r)
     breakeven = 1.0 / (1.0 + target_r)

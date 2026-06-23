@@ -92,13 +92,26 @@ def _load_last() -> dict:
 
 @app.route("/")
 def index():
-    st = _load_last()
-    return render_template_string(
-        PAGE, tf=TF, bias=BIAS_TF, tr=int(TARGET_R), be=round(st["breakeven"] * 100, 1),
-        broker=BROKER, nav=f"{st['nav']:.2f}", nupd=st["n_updates"],
-        nopen=len(st["open_positions"]), nsig=len(st.get("signals", [])),
-        signals=st.get("signals", []), open_positions=st["open_positions"],
-        closed=st["closed"][-10:][::-1] if st["closed"] else [], when=st.get("when", "never"))
+    html = """<!doctype html><html><head><meta charset=utf-8><title>MSNR API</title>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<style>body{font-family:system-ui,Segoe UI,Arial;background:#0a0d12;color:#e6edf3;max-width:680px;margin:48px auto;padding:0 20px;line-height:1.65}
+h1{font-size:22px;margin-bottom:2px}a{color:#3b82f6;text-decoration:none}code{background:#161c25;padding:2px 7px;border-radius:6px;font-size:13px}
+.ok{color:#22c55e}.muted{color:#8b97a7;font-size:14px}li{margin:5px 0}</style></head><body>
+<h1>MSNR Assistant — API</h1>
+<p class=ok>● API running &middot; {{tf}}/{{bias_tf}} &middot; {{tr}}R &middot; {{broker}}</p>
+<p class=muted>This service is the trading engine + JSON API. The full dashboard UI is the
+separate <b>Next.js app</b> (the <code>web/</code> folder) — deploy it as its own Railway
+service and set <code>NEXT_PUBLIC_API_URL</code> to this URL.</p>
+<h3>Endpoints</h3>
+<ul>
+<li><a href="/health">/health</a> &middot; <a href="/api/config">/api/config</a> &middot;
+<a href="/api/status">/api/status</a> &middot; <a href="/api/journal">/api/journal</a></li>
+<li><code>POST /api/tick?refresh=1</code> — run a tick (first call fetches data + bootstraps the model; ~1-2 min)</li>
+</ul>
+<p class=muted>Seed it now: <code>curl -X POST "{{base}}/api/tick?refresh=1"</code></p>
+</body></html>"""
+    return render_template_string(html, base=request.host_url.rstrip("/"),
+                                  tf=TF, bias_tf=BIAS_TF, tr=int(TARGET_R), broker=BROKER)
 
 
 @app.route("/tick", methods=["POST", "GET"])
