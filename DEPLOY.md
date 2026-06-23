@@ -72,7 +72,16 @@ The platform learns every time a tick runs. To run ticks automatically, hit the
 `/tick` endpoint on a schedule — e.g. a **Railway cron service** running
 `curl -X POST https://<your-app>/tick`, or any free uptime pinger.
 
-### ⚠️ Railway filesystem is ephemeral
-`data/` (paper account, model, state) resets on redeploy unless you attach a
-**Railway Volume** mounted at the project's `data/` path. For durable history,
-mount a volume (or later swap state to a small database). Fine to skip while testing.
+### Build fix (already in the repo)
+If Railway's build fails with *"No GitHub artifact attestations found for
+python@3.11.9"*, that's the `mise` installer — `mise.toml` in the repo root
+disables that check and fixes it. (Equivalent: set `MISE_PYTHON_GITHUB_ATTESTATIONS=false`
+as a service variable.)
+
+### ⚠️ Railway filesystem is ephemeral — REQUIRED for learning to persist
+`data/` (journal, paper account, state) and `models/` (the learned model) **reset on
+every redeploy** unless you attach a **Railway Volume**. Since the whole point is that
+the model *keeps learning*, mount a Volume on the API service at the repo path so
+`data/` and `models/` survive. Without it, each redeploy forgets everything it learned.
+No database is required — the journal is a CSV and the model is a `.joblib` file; a DB
+is only worth it later if you want multi-instance or queryable history.

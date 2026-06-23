@@ -1,0 +1,6 @@
+# Fixes Railway/Railpack build failure:
+#   "No GitHub artifact attestations found for python@3.11.9"
+# mise (Railpack's tool installer) verifies attestations by default and some
+# Python builds lack them; this disables that check so the install proceeds.
+[settings]
+python.github_attestations = false
