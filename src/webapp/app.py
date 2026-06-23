@@ -226,7 +226,7 @@ def _scan_only() -> list:
                 s.update(_reason(s))
                 out.append({k: s[k] for k in ("pair", "direction", "entry", "stop", "target",
                                               "conf", "size", "features", "why", "confluences",
-                                              "tf", "time")})
+                                              "tf", "time", "age_bars")})
         except Exception:  # noqa: BLE001
             continue
         except Exception:  # noqa: BLE001

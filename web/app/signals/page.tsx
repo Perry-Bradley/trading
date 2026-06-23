@@ -6,6 +6,16 @@ import { useLive, fmtPrice } from "@/lib/useLive";
 import type { Config, Signal } from "@/lib/types";
 import { DirBadge, ConfBar, Section } from "@/components/ui";
 
+const HRS: Record<string, number> = { D1: 24, H4: 4, H1: 1, M30: 0.5 };
+
+function freshness(s: Signal): { label: string; live: boolean } {
+  const age = s.age_bars ?? 99;
+  if (age <= 1) return { label: "FRESH NOW", live: true };
+  const hrs = age * (HRS[s.tf || "H4"] ?? 4);
+  if (hrs < 24) return { label: `${Math.round(hrs)}h ago`, live: false };
+  return { label: `${Math.round(hrs / 24)}d ago`, live: false };
+}
+
 export default function Signals() {
   const [cfg, setCfg] = useState<Config | null>(null);
   const [sigs, setSigs] = useState<(Signal & { why?: string; confluences?: string[] })[]>([]);
@@ -47,11 +57,15 @@ export default function Signals() {
             return (
               <div key={i} className="bg-surface border border-line rounded-2xl p-4 shadow-card">
                 <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-                  <div className="flex items-center gap-2.5">
+                  <div className="flex items-center gap-2.5 flex-wrap">
                     <span className="text-lg font-bold">{s.pair}</span>
                     <DirBadge dir={s.direction} />
-                    <span className="text-sub text-xs">{s.tf || cfg?.tf} · 1:{cfg?.target_r ?? 2}</span>
-                    {s.time && <span className="text-sub text-xs">· {s.time}</span>}
+                    {(() => { const f = freshness(s); return (
+                      <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${f.live ? "bg-up/10 text-up" : "bg-line text-sub"}`}>
+                        {f.live ? "● " : ""}{f.label}</span>
+                    ); })()}
+                    <span className="text-sub text-xs">{s.tf || cfg?.tf} · 1:{cfg?.target_r ?? 2}{s.time ? ` · ${s.time}` : ""}</span>
+                    <a href={`/pairs?p=${s.pair}`} className="text-brand text-xs font-medium ml-auto">view on chart →</a>
                   </div>
                   <div className="flex items-center gap-3">
                     <div className="w-40"><ConfBar p={s.conf} breakeven={be} /></div>

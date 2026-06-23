@@ -45,7 +45,10 @@ class PaperBroker(Broker):
         return [Position.from_dict(d) for d in self.state["open"]]
 
     def open_trade(self, sig: dict, size: float) -> Position | None:
-        if size <= 0 or self.has_open(sig["pair"]):
+        # Note: no one-per-pair block — paper TESTS every distinct signal so the
+        # accuracy/track-record reflects all the model's predictions (the id check
+        # below still prevents re-opening the same signal twice).
+        if size <= 0:
             return None
         risk_dist = abs(sig["entry"] - sig["stop"])
         if risk_dist <= 0:

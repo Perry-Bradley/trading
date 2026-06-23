@@ -279,7 +279,8 @@ def signals(pair: str, tf: str = "H4", bias_tf: str = "D1", target_r: float = 2.
         feats["tf_minutes"] = {"M30": 30, "H1": 60, "H4": 240, "D1": 1440}[tf]
         out.append({
             "pair": pair, "tf": tf, "bias_tf": bias_tf,
-            "time": df.index[i], "direction": "long" if b > 0 else "short",
+            "time": df.index[i], "age_bars": (n - 1) - i,   # 0 = current bar
+            "direction": "long" if b > 0 else "short",
             "entry": entry, "stop": stop, "target": target, "rr": target_r,
             "features": feats,
         })
