@@ -6,6 +6,11 @@ ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
+# Models live UNDER data/ so a single persistent volume (mounted at data/) keeps
+# the learned model alongside price data, the paper account and the journal.
+MODELS_DIR = DATA_DIR / "models"
+MODELS_DIR.mkdir(parents=True, exist_ok=True)
+
 # --- Instruments -------------------------------------------------------------
 # Liquid majors + clean liquid crosses (MSNR/SMC respect structure best on liquid
 # markets — Module 05: favour majors, avoid thin exotics where slippage blows stops).

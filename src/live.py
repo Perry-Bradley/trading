@@ -28,7 +28,7 @@ from src.ml.dataset import FEATURES
 
 
 def _load_model(target_r: float):
-    path = config.ROOT / "models" / f"msnr_filter_{int(target_r)}r.joblib"
+    path = config.MODELS_DIR / f"msnr_filter_{int(target_r)}r.joblib"
     if not path.exists():
         return None
     return joblib.load(path)

@@ -101,7 +101,7 @@ def main() -> int:
     import config
     lr.fit(X, y)
     keep_thr = float(np.quantile(lr.predict_proba(X)[:, 1], 0.50))  # keep top ~50%
-    models_dir = config.ROOT / "models"
+    models_dir = config.MODELS_DIR
     models_dir.mkdir(exist_ok=True)
     out = models_dir / f"msnr_filter_{int(target_r)}r.joblib"
     joblib.dump({"pipeline": lr, "features": FEATURES, "threshold": keep_thr,

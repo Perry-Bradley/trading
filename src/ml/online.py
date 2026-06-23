@@ -45,7 +45,7 @@ def vec(features: dict) -> np.ndarray:
 
 
 def policy_path(target_r: float):
-    return config.ROOT / "models" / f"online_policy_{int(target_r)}r.joblib"
+    return config.MODELS_DIR / f"online_policy_{int(target_r)}r.joblib"
 
 
 class OnlinePolicy:

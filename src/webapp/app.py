@@ -42,7 +42,7 @@ _seed_lock = threading.Lock()
 
 
 def _model_path():
-    return config.ROOT / "models" / f"online_policy_{int(TARGET_R)}r.joblib"
+    return config.MODELS_DIR / f"online_policy_{int(TARGET_R)}r.joblib"
 
 
 def _seeded() -> bool:
@@ -401,7 +401,7 @@ def api_model():
         except Exception:  # noqa: BLE001
             pass
     import joblib
-    mf = config.ROOT / "models" / f"msnr_filter_{int(TARGET_R)}r.joblib"
+    mf = config.MODELS_DIR / f"msnr_filter_{int(TARGET_R)}r.joblib"
     if mf.exists():
         try:
             info["cv_auc"] = joblib.load(mf).get("cv_auc")
