@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+import time
 
-from flask import Flask, jsonify, redirect, render_template_string, request
+from flask import Flask, jsonify, redirect, render_template_string, request, send_file
 
 import config
 from src import engine
@@ -28,6 +30,59 @@ TARGET_R = float(os.environ.get("TARGET_R", "2"))
 TF = os.environ.get("TF", "H4")
 BIAS_TF = os.environ.get("BIAS_TF", "D1")
 BROKER = os.environ.get("BROKER", "paper")
+
+# ---------------------------------------------------------------------------
+# Self-seeding: Railway's disk is ephemeral, so a fresh container has no data or
+# model. On startup we fetch data + bootstrap the model in a background thread so
+# the dashboard heals itself (~1-2 min) without anyone clicking. Polled endpoints
+# return [] (never 500) while SEED["state"] == "warming".
+# ---------------------------------------------------------------------------
+SEED = {"state": "idle"}
+_seed_lock = threading.Lock()
+
+
+def _model_path():
+    return config.ROOT / "models" / f"online_policy_{int(TARGET_R)}r.joblib"
+
+
+def _seeded() -> bool:
+    return SEED["state"] == "ready" or _model_path().exists()
+
+
+def _seed() -> None:
+    with _seed_lock:
+        if SEED["state"] == "warming":
+            return
+        SEED["state"] = "warming"
+    try:
+        from src.data import fetch
+        from src.ml.online import OnlinePolicy
+        for pr in config.PAIRS:
+            for t in {TF, BIAS_TF}:
+                if not (config.DATA_DIR / f"{pr}_{t}.parquet").exists():
+                    try:
+                        fetch.save(pr, t)
+                    except Exception as e:  # noqa: BLE001
+                        print(f"  (seed fetch {pr} {t} failed: {e})")
+        if not _model_path().exists():
+            OnlinePolicy.bootstrap(TARGET_R)
+        SEED["state"] = "ready"
+        print("[seed] ready")
+    except Exception as e:  # noqa: BLE001
+        SEED["state"] = f"error: {e}"
+        print(f"[seed] {SEED['state']}")
+
+
+def _ensure_seeding() -> None:
+    if SEED["state"] in ("warming", "ready"):
+        return
+    if _model_path().exists():
+        SEED["state"] = "ready"
+        return
+    threading.Thread(target=_seed, daemon=True).start()
+
+
+_ensure_seeding()   # kick off on import (cold start)
 
 PAGE = """
 <!doctype html><html><head><meta charset="utf-8"><title>MSNR Assistant</title>
@@ -127,21 +182,69 @@ def do_tick():
     return redirect("/")
 
 
+def _reason(s: dict) -> dict:
+    """Human-readable 'why' for a signal, from its causal features (the SMC story)."""
+    f = s.get("features", {})
+    bias = "bullish" if s["direction"] == "long" else "bearish"
+    kind = "demand (support)" if s["direction"] == "long" else "supply (resistance)"
+    conf = []
+    if f.get("choch_recent"):
+        conf.append("CHoCH (structure shifted with the bias)")
+    if f.get("sweep_recent"):
+        conf.append("liquidity sweep (stops grabbed before the move)")
+    if f.get("ob_conf"):
+        conf.append("order block at the zone")
+    if f.get("fvg_conf"):
+        conf.append("fair value gap nearby")
+    if f.get("rej_strength", 0) >= 0.6:
+        conf.append("strong rejection candle")
+    why = (f"{bias.title()} {s['tf']} bias into a fresh {kind} SNR level, confirmed by a "
+           f"rejection candle" + (". Confluences: " + ", ".join(conf) if conf else "."))
+    return {"why": why, "confluences": conf, "tf": s.get("tf", TF)}
+
+
 def _scan_only() -> list:
-    """Current signals across pairs (read-only) for display, scored by the policy."""
-    from src import backtest
-    from src.ml.online import OnlinePolicy, vec
-    pol = OnlinePolicy.load_or_bootstrap(TARGET_R)
+    """Current signals across pairs (read-only) for display, scored by the policy.
+    Never raises — returns [] until data + model are seeded."""
+    if not _seeded():
+        return []
+    try:
+        from src import backtest
+        from src.ml.online import OnlinePolicy, vec
+        pol = OnlinePolicy.load_or_bootstrap(TARGET_R)
+    except Exception:  # noqa: BLE001
+        return []
     out = []
     for pr in config.PAIRS:
         try:
             for s in backtest.signals(pr, TF, BIAS_TF, TARGET_R, lookback=3):
                 p = pol.proba(vec(s["features"]))
                 s["conf"], s["size"] = p, pol.size(p)
-                out.append({k: s[k] for k in ("pair", "direction", "entry", "stop",
-                                              "target", "conf", "size")})
-        except FileNotFoundError:
+                s.update(_reason(s))
+                out.append({k: s[k] for k in ("pair", "direction", "entry", "stop", "target",
+                                              "conf", "size", "features", "why", "confluences", "tf")})
+        except Exception:  # noqa: BLE001
             continue
+    return out
+
+
+_OVERVIEW_CACHE = {"t": 0.0, "data": []}
+
+
+def _overview() -> list:
+    """Per-pair bias + signal flag, cached 60s (detectors are not free)."""
+    if not _seeded():
+        return []
+    if time.time() - _OVERVIEW_CACHE["t"] < 60 and _OVERVIEW_CACHE["data"]:
+        return _OVERVIEW_CACHE["data"]
+    from src import backtest
+    out = []
+    for pr in config.PAIRS:
+        try:
+            out.append(backtest.overview(pr, TF, BIAS_TF, TARGET_R))
+        except Exception:  # noqa: BLE001
+            out.append({"pair": pr, "bias": "flat", "price": 0.0, "signal": False})
+    _OVERVIEW_CACHE.update(t=time.time(), data=out)
     return out
 
 
@@ -166,20 +269,30 @@ def api_config():
     from src.notify import telegram_configured
     return jsonify({"pairs": config.PAIRS, "tf": TF, "bias_tf": BIAS_TF,
                     "target_r": TARGET_R, "breakeven": 1 / (1 + TARGET_R),
-                    "broker": BROKER, "telegram": telegram_configured()})
+                    "broker": BROKER, "telegram": telegram_configured(),
+                    "seed_state": SEED["state"]})
 
 
 @app.route("/api/status")
 def api_status():
+    _ensure_seeding()
     st = _load_last()
     from src import journal
     st["track_record"] = journal.track_record()
+    st["seed_state"] = SEED["state"]
     return jsonify(st)
 
 
 @app.route("/api/signals")
 def api_signals():
-    return jsonify({"signals": _scan_only()})
+    _ensure_seeding()
+    return jsonify({"signals": _scan_only(), "seed_state": SEED["state"]})
+
+
+@app.route("/api/overview")
+def api_overview():
+    _ensure_seeding()
+    return jsonify({"overview": _overview(), "seed_state": SEED["state"]})
 
 
 @app.route("/api/journal")
@@ -194,12 +307,160 @@ def api_tick():
         return ("", 204)
     refresh = request.values.get("refresh") == "1"
     st = engine.tick(BROKER, TF, BIAS_TF, TARGET_R, refresh=refresh)
+    SEED["state"] = "ready"                       # a successful tick means we're seeded
+    _OVERVIEW_CACHE["t"] = 0.0                     # force overview refresh
     import datetime as _dt
     sigs = sorted(_scan_only(), key=lambda s: -s.get("conf", 0))
     st["signals"] = sigs[:20]
+    st["overview"] = _overview()
+    st["seed_state"] = SEED["state"]
     st["when"] = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     LAST_TICK.write_text(json.dumps(st, indent=2, default=str))
     return jsonify(st)
+
+
+_DATA_CACHE = {"t": 0.0, "data": None}
+
+
+@app.route("/api/data")
+def api_data():
+    """Data-pipeline view: bars + date range per pair/timeframe (cached 5 min)."""
+    if time.time() - _DATA_CACHE["t"] < 300 and _DATA_CACHE["data"]:
+        return jsonify(_DATA_CACHE["data"])
+    import pandas as pd
+    rows = []
+    for pr in config.PAIRS:
+        tfs = {}
+        for tf in config.TIMEFRAMES:
+            f = config.DATA_DIR / f"{pr}_{tf}.parquet"
+            if f.exists():
+                try:
+                    idx = pd.read_parquet(f, columns=["close"]).index
+                    tfs[tf] = {"bars": len(idx), "start": str(idx.min().date()),
+                               "end": str(idx.max().date())}
+                except Exception:  # noqa: BLE001
+                    tfs[tf] = None
+            else:
+                tfs[tf] = None
+        rows.append({"pair": pr, "tf": tfs})
+    out = {"pairs": rows, "timeframes": list(config.TIMEFRAMES),
+           "ladder": "D1->H4->H1->M30", "source": "yfinance", "seed_state": SEED["state"]}
+    _DATA_CACHE.update(t=time.time(), data=out)
+    return jsonify(out)
+
+
+@app.route("/api/model")
+def api_model():
+    """Model internals: features, learned weights, updates, CV AUC."""
+    from src.ml.dataset import FEATURES
+    info = {"features": FEATURES, "target_r": TARGET_R, "breakeven": 1 / (1 + TARGET_R),
+            "n_updates": 0, "coef": [], "cv_auc": None, "seed_state": SEED["state"]}
+    if _seeded():
+        try:
+            from src.ml.online import OnlinePolicy
+            pol = OnlinePolicy.load_or_bootstrap(TARGET_R)
+            info["n_updates"] = pol.n_updates
+            coef = pol.clf.coef_[0]
+            info["coef"] = sorted(
+                [{"feature": f, "weight": float(c)} for f, c in zip(FEATURES, coef)],
+                key=lambda x: -abs(x["weight"]))
+        except Exception:  # noqa: BLE001
+            pass
+    import joblib
+    mf = config.ROOT / "models" / f"msnr_filter_{int(TARGET_R)}r.joblib"
+    if mf.exists():
+        try:
+            info["cv_auc"] = joblib.load(mf).get("cv_auc")
+        except Exception:  # noqa: BLE001
+            pass
+    return jsonify(info)
+
+
+_BT_CACHE = {}
+
+
+@app.route("/api/backtest")
+def api_backtest():
+    """On-demand backtest for a pair (or all). Cached per pair for 10 min."""
+    if not _seeded():
+        return jsonify({"seed_state": SEED["state"], "results": []})
+    from src import backtest
+    pairs = [request.args.get("pair")] if request.args.get("pair") else config.PAIRS
+    results = []
+    for pr in pairs:
+        if not pr:
+            continue
+        key = f"{pr}:{TF}:{BIAS_TF}:{TARGET_R}"
+        cached = _BT_CACHE.get(key)
+        if cached and time.time() - cached[0] < 600:
+            results.append(cached[1]); continue
+        try:
+            m = backtest.run(pr, TF, BIAS_TF, target_r=TARGET_R)
+            row = {k: m[k] for k in ("pair", "trades", "wins", "losses", "win_rate",
+                                     "breakeven_wr", "expectancy_r", "total_r",
+                                     "avg_win_r", "avg_loss_r", "profit_factor", "max_dd_r")}
+            row["profit_factor"] = None if row["profit_factor"] == float("inf") else row["profit_factor"]
+            _BT_CACHE[key] = (time.time(), row)
+            results.append(row)
+        except Exception as e:  # noqa: BLE001
+            results.append({"pair": pr, "error": str(e)})
+    return jsonify({"results": results, "tf": TF, "bias_tf": BIAS_TF, "target_r": TARGET_R})
+
+
+_ANALYSIS_CACHE = {}
+
+
+@app.route("/api/analysis")
+def api_analysis():
+    """SMC analysis for a pair: bias, structure breaks (BOS/CHoCH), fresh SNR,
+    order blocks, fair value gaps, and liquidity sweeps (BSL/SSL) — with levels."""
+    pair = request.args.get("pair", config.PAIRS[0])
+    if not _seeded():
+        return jsonify({"seed_state": SEED["state"]})
+    c = _ANALYSIS_CACHE.get(pair)
+    if c and time.time() - c[0] < 60:
+        return jsonify(c[1])
+    from src.data.fetch import load
+    from src.detectors import smc
+    from src.detectors import snr as snrmod
+    from src.detectors import structure as stmod
+    df = load(pair, TF)
+    last = len(df) - 1
+    res = stmod.analyze(df)
+    breaks = [{"type": b.kind, "dir": b.direction, "level": round(b.level, 5),
+               "time": str(df.index[b.idx])[:16]} for b in res["breaks"][-6:]][::-1]
+    bias = "long" if (breaks and breaks[0]["dir"] == "up") else "short" if breaks else "flat"
+    fresh = [{"kind": z.kind, "top": round(z.top, 5), "bottom": round(z.bottom, 5),
+              "time": str(z.anchor_time)[:16]}
+             for z in snrmod.detect(df) if z.is_fresh_at(last) and z.is_valid_at(last)][-8:][::-1]
+    obs = [{"kind": o.kind, "top": round(o.top, 5), "bottom": round(o.bottom, 5),
+            "time": str(o.time)[:16]} for o in smc.order_blocks(df)[-6:]][::-1]
+    fvgs = [{"kind": f.kind, "top": round(f.top, 5), "bottom": round(f.bottom, 5),
+             "time": str(f.time)[:16]} for f in smc.fair_value_gaps(df)[-6:]][::-1]
+    sweeps = [{"side": "BSL" if s.direction == "bsl" else "SSL", "level": round(s.level, 5),
+               "time": str(s.time)[:16]} for s in smc.liquidity_sweeps(df)[-6:]][::-1]
+    out = {"pair": pair, "tf": TF, "bias_tf": BIAS_TF, "price": round(float(df["close"].iat[-1]), 5),
+           "bias": bias, "breaks": breaks, "fresh_snr": fresh, "order_blocks": obs,
+           "fvgs": fvgs, "sweeps": sweeps}
+    _ANALYSIS_CACHE[pair] = (time.time(), out)
+    return jsonify(out)
+
+
+@app.route("/api/chart")
+def api_chart():
+    """Server-rendered annotated chart PNG (SNR zones + structure + rejections)."""
+    pair = request.args.get("pair", config.PAIRS[0])
+    tf = request.args.get("tf", TF)
+    if pair not in config.PAIRS or tf not in config.TIMEFRAMES:
+        return ("bad params", 400)
+    if not _seeded():
+        return ("warming", 503)
+    try:
+        from src.viz.plot_chart import plot
+        path = plot(pair, tf, bars=140, left=3, right=3)
+        return send_file(path, mimetype="image/png")
+    except Exception as e:  # noqa: BLE001
+        return (str(e), 500)
 
 
 if __name__ == "__main__":

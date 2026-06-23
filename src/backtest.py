@@ -286,6 +286,20 @@ def signals(pair: str, tf: str = "H4", bias_tf: str = "D1", target_r: float = 2.
     return out
 
 
+def overview(pair: str, tf: str = "H4", bias_tf: str = "D1", target_r: float = 2.0) -> dict:
+    """Lightweight per-pair snapshot for the dashboard pairs panel."""
+    df = load(pair, tf)
+    barr = _htf_bias_array(df, load(pair, bias_tf)) if bias_tf else _htf_bias_array(df, df)
+    b = int(barr[-1]) if len(barr) else 0
+    has_sig = len(signals(pair, tf, bias_tf, target_r, lookback=3)) > 0
+    return {
+        "pair": pair,
+        "bias": "long" if b > 0 else "short" if b < 0 else "flat",
+        "price": float(df["close"].iat[-1]),
+        "signal": has_sig,
+    }
+
+
 def _metrics(pair, tf, bias_tf, target_r, trades: list[Trade]) -> dict:
     rs = np.array([t.r for t in trades])
     wins = [t for t in trades if t.outcome == "win"]
