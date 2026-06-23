@@ -27,9 +27,10 @@ export default function Signals() {
         <span className="text-sub text-sm">{sigs.length} setup{sigs.length === 1 ? "" : "s"} now</span>
       </div>
       <p className="text-sub text-sm">
-        Each setup is a fresh MSNR level tapped with a rejection candle, in the direction of higher-timeframe
-        structure, scored by the self-learning model. <b className="text-up">TAKE</b> = model confidence above
-        the {(be * 100).toFixed(0)}% breakeven for {cfg?.target_r ?? 2}R; otherwise it&apos;s a watch.
+        Most recent qualifying setups (newest first) — a fresh MSNR level tapped with a rejection candle in the
+        direction of higher-timeframe structure, scored by the self-learning model. <b className="text-up">TAKE</b> =
+        model confidence above the {(be * 100).toFixed(0)}% breakeven for {cfg?.target_r ?? 2}R; otherwise a watch.
+        Check the timestamp for how fresh each one is.
       </p>
 
       {sigs.length === 0 ? (
@@ -50,6 +51,7 @@ export default function Signals() {
                     <span className="text-lg font-bold">{s.pair}</span>
                     <DirBadge dir={s.direction} />
                     <span className="text-sub text-xs">{s.tf || cfg?.tf} · 1:{cfg?.target_r ?? 2}</span>
+                    {s.time && <span className="text-sub text-xs">· {s.time}</span>}
                   </div>
                   <div className="flex items-center gap-3">
                     <div className="w-40"><ConfBar p={s.conf} breakeven={be} /></div>

@@ -35,6 +35,7 @@ export type Signal = {
   conf: number;
   size: number;
   tf?: string;
+  time?: string;
   why?: string;
   confluences?: string[];
 };

@@ -217,12 +217,18 @@ def _scan_only() -> list:
     out = []
     for pr in config.PAIRS:
         try:
-            for s in backtest.signals(pr, TF, BIAS_TF, TARGET_R, lookback=3):
+            # scan a wider recent window so the page shows recent setups (each tagged
+            # with its time), not only triggers on the last 3 bars.
+            for s in backtest.signals(pr, TF, BIAS_TF, TARGET_R, lookback=40):
                 p = pol.proba(vec(s["features"]))
                 s["conf"], s["size"] = p, pol.size(p)
+                s["time"] = str(s.get("time", ""))[:16]
                 s.update(_reason(s))
                 out.append({k: s[k] for k in ("pair", "direction", "entry", "stop", "target",
-                                              "conf", "size", "features", "why", "confluences", "tf")})
+                                              "conf", "size", "features", "why", "confluences",
+                                              "tf", "time")})
+        except Exception:  # noqa: BLE001
+            continue
         except Exception:  # noqa: BLE001
             continue
     return out
