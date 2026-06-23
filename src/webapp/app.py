@@ -132,9 +132,61 @@ def _scan_only() -> list:
     return out
 
 
+# ---------------------------------------------------------------------------
+# JSON API (consumed by the Next.js frontend in web/)
+# ---------------------------------------------------------------------------
+@app.after_request
+def _cors(resp):
+    resp.headers["Access-Control-Allow-Origin"] = os.environ.get("CORS_ORIGIN", "*")
+    resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    return resp
+
+
+@app.route("/health")
+def health():
+    return jsonify({"ok": True})
+
+
+@app.route("/api/config")
+def api_config():
+    from src.notify import telegram_configured
+    return jsonify({"pairs": config.PAIRS, "tf": TF, "bias_tf": BIAS_TF,
+                    "target_r": TARGET_R, "breakeven": 1 / (1 + TARGET_R),
+                    "broker": BROKER, "telegram": telegram_configured()})
+
+
 @app.route("/api/status")
 def api_status():
-    return jsonify(_load_last())
+    st = _load_last()
+    from src import journal
+    st["track_record"] = journal.track_record()
+    return jsonify(st)
+
+
+@app.route("/api/signals")
+def api_signals():
+    return jsonify({"signals": _scan_only()})
+
+
+@app.route("/api/journal")
+def api_journal():
+    from src import journal
+    return jsonify({"rows": journal.recent(int(request.args.get("n", 60)))})
+
+
+@app.route("/api/tick", methods=["POST", "OPTIONS"])
+def api_tick():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    refresh = request.values.get("refresh") == "1"
+    st = engine.tick(BROKER, TF, BIAS_TF, TARGET_R, refresh=refresh)
+    import datetime as _dt
+    sigs = sorted(_scan_only(), key=lambda s: -s.get("conf", 0))
+    st["signals"] = sigs[:20]
+    st["when"] = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    LAST_TICK.write_text(json.dumps(st, indent=2, default=str))
+    return jsonify(st)
 
 
 if __name__ == "__main__":

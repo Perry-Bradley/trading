@@ -40,3 +40,15 @@ def notify(title: str, body: str = "") -> None:
     except Exception:  # noqa: BLE001
         pass
     _telegram(f"{ts}\n{text}")
+
+
+def telegram_configured() -> bool:
+    return bool(os.environ.get("TELEGRAM_TOKEN") and os.environ.get("TELEGRAM_CHAT_ID"))
+
+
+if __name__ == "__main__":  # quick test: python -m src.notify "hello"
+    import sys
+    msg = sys.argv[1] if len(sys.argv) > 1 else "MSNR assistant test alert"
+    notify("TEST", msg)
+    print("telegram:", "configured -> sent" if telegram_configured()
+          else "NOT configured (set TELEGRAM_TOKEN and TELEGRAM_CHAT_ID)")

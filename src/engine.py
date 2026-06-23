@@ -14,8 +14,10 @@ turned out. Run it on a schedule (cron / Railway worker / the /loop skill).
 """
 from __future__ import annotations
 
+import datetime as _dt
+
 import config
-from src import backtest
+from src import backtest, journal
 from src.broker import get_broker
 from src.ml.online import OnlinePolicy, policy_path, vec
 from src.notify import notify
@@ -44,6 +46,10 @@ def tick(broker_kind: str = "paper", tf: str = "H4", bias_tf: str = "D1",
     for pos in closed:
         notify(f"CLOSED {pos.pair} {pos.direction} [{pos.outcome}]",
                f"P&L {pos.pnl:+.2f} (R {pos.r if pos.r is not None else 0:+.2f})  NAV {broker.nav():.2f}")
+        journal.record({"ts": _dt.datetime.now().isoformat(timespec="seconds"),
+                        "event": "CLOSE", "pair": pos.pair, "direction": pos.direction,
+                        "tf": pos.tf, "entry": pos.entry, "stop": pos.stop, "target": pos.target,
+                        "outcome": pos.outcome, "r": pos.r, "pnl": pos.pnl, "nav": broker.nav()})
         if pos.features:
             policy.update(vec(pos.features), 1 if pos.outcome == "win" else 0)
             learned += 1
@@ -68,10 +74,21 @@ def tick(broker_kind: str = "paper", tf: str = "H4", bias_tf: str = "D1",
                     notify(f"NEW {pr} {s['direction'].upper()} {tf}/{bias_tf}",
                            f"entry {s['entry']:.5f} SL {s['stop']:.5f} TP {s['target']:.5f} "
                            f"1:{target_r:.0f}  conf {p*100:.1f}%  size {size:.2f}x")
+                    journal.record({"ts": _dt.datetime.now().isoformat(timespec="seconds"),
+                                    "event": "ENTRY", "pair": pr, "direction": s["direction"],
+                                    "tf": tf, "entry": s["entry"], "stop": s["stop"],
+                                    "target": s["target"], "conf": round(p, 3),
+                                    "size": round(size, 2), "nav": broker.nav()})
+
+    rec = journal.track_record()
+    if closed:
+        notify("PROGRESS", f"{len(closed)} closed | NAV {broker.nav():.2f} | record: "
+               + journal.summary_line())
 
     return {
         "broker": broker.name, "nav": broker.nav(), "target_r": target_r,
         "breakeven": breakeven, "n_updates": policy.n_updates,
+        "track_record": rec,
         "closed": [c.to_dict() for c in closed],
         "opened": opened,
         "open_positions": [p.to_dict() for p in broker.open_positions()],

@@ -24,22 +24,42 @@ The goal is to:
 - [x] **Phase 4 — ML layer**: causal features → regularized filter + **online contextual
   bandit** (continual learning) → confidence-scaled, high-R:R position sizing.
 - [x] **Phase 5 — Assistant**: live signals, paper/MT5/OANDA brokers, alerts
-  (console/log/Telegram), continual-learning engine tick, web dashboard, Railway deploy.
+  (console/log/Telegram), continual-learning engine, **JSON API + Next.js dashboard**,
+  trade journal, scheduler, Railway deploy.
 
-### Live trading loop & deployment
+### Architecture (two services)
 
-```bash
-python -m src.engine --broker paper --refresh   # one tick: scan, size, trade, LEARN, alert
-python -m src.webapp.app                         # dashboard at http://localhost:8000
+```
+ Python backend  (src/)            Next.js frontend (web/)
+ ────────────────────────          ───────────────────────
+ detectors · scanner · backtest    SaaS dashboard, mobile-responsive
+ ML + online bandit (learns)       polls the API, "Run tick" button
+ brokers · journal · engine
+ Flask JSON API  ───────────────►  fetch /api/* (NEXT_PUBLIC_API_URL)
 ```
 
-- **`src/engine.py`** — one tick = sync broker → **learn from every closed trade
-  (partial_fit + re-save)** → scan → score → open confident setups → alert.
-  This is the "keeps learning like RL" loop; run it on a schedule.
+### Run it locally
+```bash
+# 1) backend API
+python -m src.webapp.app                 # http://localhost:8000  (/api/*)
+# 2) frontend (separate terminal)
+cd web && npm install && npm run dev      # http://localhost:3000
+# 3) keep it ticking + learning on a schedule
+python -m src.runner --interval 3600      # hourly: scan, trade, LEARN, alert
+```
+
+- **`src/engine.py`** `tick()` — sync broker → **learn from every closed trade
+  (`partial_fit` + re-save)** → scan → score → open confident setups → journal + alert.
+  The "keeps learning like RL" loop.
+- **`src/journal.py`** — every entry/close logged to `data/journal.csv`; `track_record()`
+  powers the dashboard's win-rate / expectancy / total-R panel.
 - **Brokers** (`src/broker/`): `paper` (local, no account), `mt5` (Exness/Deriv/XM —
-  works in Cameroon), `oanda`. **OANDA is not required.**
-- **Alerts** (`src/notify.py`): console + `alerts.log` always; Telegram if configured.
-- **Web + Railway**: `src/webapp/app.py`, `Procfile`, `runtime.txt`. See **[DEPLOY.md](DEPLOY.md)**.
+  **works in Cameroon**), `oanda`. **OANDA is not required.**
+- **Alerts** (`src/notify.py`): console + `alerts.log` always; **Telegram** push if configured
+  (`python -m src.notify "test"` to check).
+- **Pairs (11)**: EUR/GBP/AUD/NZD-USD, USDJPY, USDCAD, EURNZD, EURJPY, GBPJPY, CHFJPY, BTCUSD
+  — liquid majors + clean crosses (best structure adherence) + crypto.
+- **Deploy:** see **[DEPLOY.md](DEPLOY.md)** (both services on Railway).
 
 ### Phase 4 — ML filter (honest evaluation)
 

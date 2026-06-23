@@ -7,8 +7,14 @@ DATA_DIR = ROOT / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
 # --- Instruments -------------------------------------------------------------
-# The forex pairs from the user's practice screenshots, plus BTCUSD (crypto).
-PAIRS = ["EURUSD", "GBPUSD", "AUDUSD", "EURNZD", "CHFJPY", "BTCUSD"]
+# Liquid majors + clean liquid crosses (MSNR/SMC respect structure best on liquid
+# markets — Module 05: favour majors, avoid thin exotics where slippage blows stops).
+# Includes the user's original screenshots' pairs + NZDUSD + BTCUSD.
+PAIRS = [
+    "EURUSD", "GBPUSD", "AUDUSD", "NZDUSD", "USDJPY", "USDCAD",   # majors
+    "EURNZD", "EURJPY", "GBPJPY", "CHFJPY",                       # liquid crosses
+    "BTCUSD",                                                     # crypto
+]
 
 # Crypto behaves differently from forex: 24/7, real volume, no "pip" convention.
 CRYPTO = {"BTCUSD"}
@@ -18,7 +24,12 @@ YF_TICKERS = {
     "EURUSD": "EURUSD=X",
     "GBPUSD": "GBPUSD=X",
     "AUDUSD": "AUDUSD=X",
+    "NZDUSD": "NZDUSD=X",
+    "USDJPY": "USDJPY=X",
+    "USDCAD": "USDCAD=X",
     "EURNZD": "EURNZD=X",
+    "EURJPY": "EURJPY=X",
+    "GBPJPY": "GBPJPY=X",
     "CHFJPY": "CHFJPY=X",
     "BTCUSD": "BTC-USD",
 }

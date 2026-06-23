@@ -1,0 +1,11 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body { background: #0a0d12; color: #e6edf3; }
+* { -webkit-tap-highlight-color: transparent; }
+
+/* thin scrollbars for the data tables */
+.scroll-x { overflow-x: auto; }
+.scroll-x::-webkit-scrollbar { height: 6px; }
+.scroll-x::-webkit-scrollbar-thumb { background: #2a3340; border-radius: 3px; }

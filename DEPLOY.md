@@ -40,15 +40,32 @@ TELEGRAM_CHAT_ID=987654321
 ```
 Now every new entry and every close pushes to your phone.
 
-## Deploy to Railway (get a URL)
-1. Push this folder to a GitHub repo.
-2. On [railway.app](https://railway.app): **New Project → Deploy from GitHub repo**.
-3. Railway reads `requirements.txt` + `Procfile` and starts the web dashboard.
-   Your URL appears under the service's **Settings → Domains**.
-4. Set env vars (Variables tab): `TARGET_R=2`, `TF=H4`, `BIAS_TF=D1`,
-   `BROKER=paper` (+ Telegram/MT5 vars if used).
-5. First visit → click **"Run tick + refresh data"** to pull data, bootstrap the
-   model, and generate signals.
+## Deploy to Railway (get a URL) — two services
+
+The app is **two services**: a Python **API** (`src/webapp/app.py`) and a Next.js
+**dashboard** (`web/`). Deploy both from the same GitHub repo.
+
+**Service 1 — API (Python)**
+1. Railway → **New Project → Deploy from GitHub repo** → pick `Perry-Bradley/trading`.
+2. It reads `requirements.txt` + `Procfile` and starts the API. Grab its URL under
+   **Settings → Domains** (e.g. `https://msnr-api.up.railway.app`).
+3. Variables: `TARGET_R=2`, `TF=H4`, `BIAS_TF=D1`, `BROKER=paper`
+   (+ `TELEGRAM_*` / `MT5_*` if used). Optional: `LEARNING_RATE`, `ETA0`.
+
+**Service 2 — dashboard (Next.js)**
+4. **New service → same repo**, set **Root Directory = `web`** (Railway auto-detects
+   Next.js: `npm install` + `npm run build` + `npm start`).
+5. Variable: `NEXT_PUBLIC_API_URL=https://<your-api-url>` (the Service-1 URL).
+6. Open the dashboard URL → click **"Refresh data + tick"** to pull data, bootstrap
+   the model, generate signals, and start the journal.
+
+> **CORS:** the API allows all origins by default; set `CORS_ORIGIN=https://<dashboard-url>`
+> on the API service to lock it to your frontend.
+
+### Keep it learning on a schedule
+The platform learns each tick. Automate ticks one of two ways:
+- a **Railway cron service**: `curl -X POST "$API_URL/api/tick?refresh=1"`, or
+- run the loop on a VPS: `python -m src.runner --interval 3600`.
 
 ### Keep it learning on a schedule
 The platform learns every time a tick runs. To run ticks automatically, hit the

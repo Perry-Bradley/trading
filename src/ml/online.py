@@ -50,13 +50,17 @@ def policy_path(target_r: float):
 
 class OnlinePolicy:
     def __init__(self, target_r: float, gain: float = 10.0, max_size: float = 2.5,
-                 alpha: float = 1e-3):
+                 alpha: float = 1e-3, learning_rate: str = "optimal", eta0: float = 0.0):
+        # learning_rate: "optimal" (default, decays with #updates — stable, slow to
+        #   adapt) or "constant" with eta0>0 (each new trade has steady influence —
+        #   faster regime adaptation, noisier). See env LEARNING_RATE / ETA0.
         self.target_r = target_r
         self.breakeven = 1.0 / (1.0 + target_r)
         self.gain = gain
         self.max_size = max_size
         self.scaler = StandardScaler()
-        self.clf = SGDClassifier(loss="log_loss", alpha=alpha, random_state=0)
+        self.clf = SGDClassifier(loss="log_loss", alpha=alpha,
+                                 learning_rate=learning_rate, eta0=eta0, random_state=0)
         self.cw = {0: 1.0, 1: 1.0}
         self.n_updates = 0          # how many live trades it has learned from
         self._ready = False
