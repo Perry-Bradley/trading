@@ -126,8 +126,28 @@ def plot(pair: str, timeframe: str, bars: int, left: int, right: int,
     for sw in [s for s in smc.liquidity_sweeps(full, left, right) if s.idx >= start][-8:]:
         x = pos[sw.idx]
         ax.scatter(x, sw.level, marker="x", s=32, color=SWP, zorder=5, linewidths=1.4)
-        ax.annotate(sw.direction.upper(), (x, sw.level), textcoords="offset points",
+        lbl = "BSL" if sw.direction == "bsl" else "SSL"
+        ax.annotate(lbl, (x, sw.level), textcoords="offset points",
                     xytext=(3, 2), fontsize=6, color=SWP, fontweight="bold")
+
+    # --- SMC POIs: Breakers & Quasimodos ---
+    breakers = [b for b in smc.breaker_blocks(full, left, right) 
+                if b.idx >= start and ymin <= b.bottom <= ymax][-4:]
+    for bb in breakers:
+        x0 = pos[bb.idx]
+        col = "#0277bd" if bb.kind == "bullish" else "#d84315"
+        ax.add_patch(Rectangle((x0, bb.bottom), min(20, n - x0), bb.top - bb.bottom, facecolor=col,
+                               alpha=0.1, edgecolor=col, lw=0.8, ls="--", zorder=1))
+        ax.annotate("BB", (x0, bb.top), fontsize=6.5, color=col, fontweight="bold")
+        
+    qms = [q for q in smc.quasimodos(full, left, right) if q.idx >= start][-4:]
+    for qm in qms:
+        x0 = pos[qm.idx]
+        col = "#1565c0" if qm.kind == "bullish" else "#c62828"
+        ax.scatter(x0, qm.sweep_level, s=30, color=col, marker="*", zorder=6)
+        ax.annotate("QM", (x0, qm.sweep_level), textcoords="offset points",
+                    xytext=(0, 5 if qm.kind == "bearish" else -12), ha="center",
+                    fontsize=7, color=col, fontweight="bold")
 
     # -----------------------------------------------------------------------
     # SIGNAL OVERLAY — draws the exact trade setup on the chart
@@ -164,10 +184,10 @@ def plot(pair: str, timeframe: str, bars: int, left: int, right: int,
         rr = abs(target - entry) / abs(entry - stop) if abs(entry - stop) > 0 else 0
         title = (f"{pair} {timeframe}  ·  {'▲ LONG' if long else '▼ SHORT'}"
                  f"  ·  Entry {entry:.5f}  SL {stop:.5f}  TP {target:.5f}  (1:{rr:.1f}R)"
-                 f"  ·  SNR · structure · OB/FVG")
+                 f"  ·  SNR · OB/FVG · BB/QM")
         suffix = f"_sig_{int(entry*1e5)}"
     else:
-        title = f"{pair} {timeframe} — SNR · structure · rejections · OB/FVG · liquidity sweeps"
+        title = f"{pair} {timeframe} — SNR · structure · rejections · OB/FVG · BB/QM · BSL/SSL"
         suffix = "_full"
 
     ticks = range(0, n, max(1, n // 12))

@@ -935,7 +935,11 @@ def api_chart():
         stop_p = request.args.get("stop", type=float)
         target = request.args.get("target", type=float)
         direction = request.args.get("dir", default=None)
-        path = plot(pair, tf, bars=140, left=3, right=3,
+        
+        # Zoom in (70 bars) if showing a specific signal, otherwise show full context (140 bars)
+        n_bars = 70 if entry is not None else 140
+        
+        path = plot(pair, tf, bars=n_bars, left=3, right=3,
                     entry=entry, stop=stop_p, target=target, direction=direction)
         return send_file(path, mimetype="image/png")
     except FileNotFoundError:
