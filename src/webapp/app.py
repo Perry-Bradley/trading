@@ -277,8 +277,10 @@ def _reason(s: dict) -> dict:
 
 
 # Maximum signal age in bars per timeframe
-# H4: 12 bars = 48h (2 days)  H1: 24 bars = 1 day  M30: 32 bars = 16h
-_TF_MAX_AGE = {"H4": 12, "H1": 24, "M30": 32}
+# H4: 6 bars = 24h  H1: 12 bars = 12h  M30: 16 bars = 8h
+# Calendar cap: signals older than 48h wall-clock are always dropped.
+_TF_MAX_AGE = {"H4": 6, "H1": 12, "M30": 16}
+_SIGNAL_MAX_AGE_HOURS = 48   # never show a signal whose candle is > 2 days old
 _ENTRY_TFS = ["H4", "H1", "M30"]              # scan all three
 
 
@@ -312,15 +314,30 @@ def _scan_only() -> list:
     _ensure_fingerprints()
     news_data = _get_news()
 
+    import datetime as _dt
+    _now = _dt.datetime.utcnow()
     raw_signals = []
     for pr in config.PAIRS:
         for entry_tf in _ENTRY_TFS:
             try:
-                max_age = _TF_MAX_AGE.get(entry_tf, 12)
-                lookback = max_age * 3  # wide window so zone-tap combos are found
+                max_age = _TF_MAX_AGE.get(entry_tf, 6)
+                lookback = max_age * 4  # wide scan window
                 for s in backtest.signals(pr, entry_tf, BIAS_TF, TARGET_R, lookback=lookback):
                     if s.get("age_bars", 999) > max_age:
                         continue
+                    # Calendar-time check: reject signals from stale data
+                    sig_time = s.get("time")
+                    if sig_time is not None:
+                        try:
+                            if hasattr(sig_time, 'to_pydatetime'):
+                                sig_dt = sig_time.to_pydatetime().replace(tzinfo=None)
+                            else:
+                                sig_dt = _dt.datetime.fromisoformat(str(sig_time)[:16])
+                            age_hours = (_now - sig_dt).total_seconds() / 3600
+                            if age_hours > _SIGNAL_MAX_AGE_HOURS:
+                                continue  # data is too stale — skip
+                        except Exception:
+                            pass
 
                     # --- Multi-TF alignment check (MSNR course rule) ---
                     ltf_map = {"H4": "H1", "H1": "M30"}   # H4 aligns with H1; H1 aligns with M30
@@ -378,8 +395,10 @@ def _scan_only() -> list:
                         "conf", "size", "features", "why", "confluences",
                         "tf", "time", "age_bars", "tf_aligned", "aligned_tf"
                     )})
-            except Exception:  # noqa: BLE001
-                continue
+            except FileNotFoundError:
+                pass  # pair has no data file yet — skip silently
+            except Exception as exc:  # noqa: BLE001
+                print(f"  [scan_only] {pr} {entry_tf}: {exc}")
                 
     # Sort: multi-TF aligned first, then by confidence
     raw_signals.sort(key=lambda s: (-int(s.get("tf_aligned", False)), -s.get("conf", 0)))
@@ -526,11 +545,21 @@ def api_journal():
 
 
 def _run_and_cache(refresh: bool) -> dict:
-    """Run one engine tick (scan → trade → learn), cache results for the dashboard."""
+    """Run one engine tick (scan, trade, learn), cache results for the dashboard."""
     import datetime as _dt
+    # Auto-refresh data if it is more than 4 hours old
+    if not refresh:
+        try:
+            last_mtime = max(f.stat().st_mtime for f in config.DATA_DIR.glob("*.parquet"))
+            age_h = (_dt.datetime.now().timestamp() - last_mtime) / 3600
+            if age_h > 4:
+                refresh = True
+                print(f"[tick] data is {age_h:.1f}h old - auto-refreshing")
+        except Exception:
+            pass
     st = engine.tick(BROKER, TF, BIAS_TF, TARGET_R, refresh=refresh)
-    SEED["state"] = "ready"                       # a successful tick means we're seeded
-    _OVERVIEW_CACHE["t"] = 0.0                     # force overview refresh
+    SEED["state"] = "ready"
+    _OVERVIEW_CACHE["t"] = 0.0
     st["signals"] = sorted(_scan_only(), key=lambda s: -s.get("conf", 0))[:20]
     st["overview"] = _overview()
     st["seed_state"] = SEED["state"]
