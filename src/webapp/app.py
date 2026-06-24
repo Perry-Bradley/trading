@@ -604,11 +604,26 @@ def _run_and_cache(refresh: bool) -> dict:
     return st
 
 
+_manual_tick_lock = threading.Lock()
+
+def _async_manual_tick(refresh: bool):
+    if not _manual_tick_lock.acquire(blocking=False):
+        return  # already running
+    try:
+        SEED["state"] = "warming"
+        _run_and_cache(refresh=refresh)
+    finally:
+        SEED["state"] = "ready"
+        _manual_tick_lock.release()
+
 @app.route("/api/tick", methods=["POST", "OPTIONS"])
 def api_tick():
     if request.method == "OPTIONS":
         return ("", 204)
-    return jsonify(_run_and_cache(request.values.get("refresh") == "1"))
+    refresh = request.values.get("refresh") == "1"
+    threading.Thread(target=_async_manual_tick, args=(refresh,), daemon=True).start()
+    # Return immediately so the dashboard doesn't hang for 13 minutes
+    return jsonify({"status": "running", "seed_state": "warming"})
 
 
 # --- autonomous scheduler: tick on an interval so it trades & learns on its own ---
