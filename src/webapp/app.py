@@ -276,8 +276,9 @@ def _reason(s: dict) -> dict:
     return {"why": why, "confluences": conf, "tf": s.get("tf", TF)}
 
 
-# Maximum signal age in bars per timeframe (per JetFX: intraday = hours, not days)
-_TF_MAX_AGE = {"H4": 6, "H1": 6, "M30": 8}   # H4→24h, H1→6h, M30→4h
+# Maximum signal age in bars per timeframe
+# H4: 12 bars = 48h (2 days)  H1: 24 bars = 1 day  M30: 32 bars = 16h
+_TF_MAX_AGE = {"H4": 12, "H1": 24, "M30": 32}
 _ENTRY_TFS = ["H4", "H1", "M30"]              # scan all three
 
 
@@ -315,8 +316,9 @@ def _scan_only() -> list:
     for pr in config.PAIRS:
         for entry_tf in _ENTRY_TFS:
             try:
-                max_age = _TF_MAX_AGE.get(entry_tf, 6)
-                for s in backtest.signals(pr, entry_tf, BIAS_TF, TARGET_R, lookback=max_age + 4):
+                max_age = _TF_MAX_AGE.get(entry_tf, 12)
+                lookback = max_age * 3  # wide window so zone-tap combos are found
+                for s in backtest.signals(pr, entry_tf, BIAS_TF, TARGET_R, lookback=lookback):
                     if s.get("age_bars", 999) > max_age:
                         continue
 
