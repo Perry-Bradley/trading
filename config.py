@@ -16,12 +16,14 @@ MODELS_DIR.mkdir(parents=True, exist_ok=True)
 # markets — Module 05: favour majors, avoid thin exotics where slippage blows stops).
 # Includes the user's original screenshots' pairs + NZDUSD + BTCUSD.
 PAIRS = [
-    "EURUSD", "GBPUSD", "AUDUSD", "NZDUSD", "USDJPY", "USDCAD",   # majors
-    "EURJPY", "GBPJPY", "CHFJPY",                                 # liquid crosses
-    "XAUUSD",                                                     # gold
-    "BTCUSD",                                                     # crypto
-    "US30", "NAS100", "SPX500",                                   # indices
-    "V100", "V25",                                                # deriv volatility indices
+    # Top 3 most liquid majors (cleanest structure)
+    "EURUSD", "GBPUSD", "AUDUSD",
+    # Gold (always respected)
+    "XAUUSD",
+    # Crypto (fast thread - 60s)
+    "BTCUSD",
+    # Deriv Volatility (fast thread - 60s)
+    "V100", "V25",
 ]
 
 # Crypto behaves differently from forex: 24/7, real volume, no "pip" convention.
