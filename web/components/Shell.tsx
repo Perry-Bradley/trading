@@ -9,6 +9,7 @@ import type { Config } from "@/lib/types";
 const NAV = [
   { href: "/", label: "Overview", icon: "▦" },
   { href: "/signals", label: "Signals", icon: "◎" },
+  { href: "/journal", label: "Journal", icon: "📓" },
   { href: "/pairs", label: "Pairs", icon: "⇄" },
   { href: "/performance", label: "Performance", icon: "📈" },
   { href: "/model", label: "Model", icon: "✦" },

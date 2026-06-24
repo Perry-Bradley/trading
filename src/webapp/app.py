@@ -303,6 +303,8 @@ def _scan_only() -> list:
     if not _seeded():
         return []
 
+    from src import backtest
+
     # Build LTF zone caches for multi-TF alignment (loaded once per pair)
     ltf_cache: dict[tuple, list] = {}
     
@@ -508,7 +510,17 @@ def api_overview():
 @app.route("/api/journal")
 def api_journal():
     from src import journal
-    return jsonify({"rows": journal.recent(int(request.args.get("n", 60)))})
+    trades = journal.recent(int(request.args.get("n", 60)))
+    for t in trades:
+        if "why" not in t:
+            fp = get_fingerprint(t.get("features", {}))
+            fp_name = "Standard MSNR"
+            if fp == "QML": fp_name = "Quasimodo (QML)"
+            elif fp == "TurtleSoup": fp_name = "Turtle Soup / SH+BMS+RTO"
+            elif fp == "Flipped": fp_name = "SBR/RBS Flip"
+            elif fp == "OB_FVG": fp_name = "Order Block / FVG"
+            t["why"] = f"[{fp_name}] {t.get('direction', '').title()} setup"
+    return jsonify({"rows": trades})
 
 
 def _run_and_cache(refresh: bool) -> dict:
