@@ -930,7 +930,13 @@ def api_chart():
     
     try:
         from src.viz.plot_chart import plot
-        path = plot(pair, tf, bars=140, left=3, right=3)
+        # Optional signal overlay params
+        entry = request.args.get("entry", type=float)
+        stop_p = request.args.get("stop", type=float)
+        target = request.args.get("target", type=float)
+        direction = request.args.get("dir", default=None)
+        path = plot(pair, tf, bars=140, left=3, right=3,
+                    entry=entry, stop=stop_p, target=target, direction=direction)
         return send_file(path, mimetype="image/png")
     except FileNotFoundError:
         return _chart_placeholder(pair, tf, "No data yet — click Refresh + tick")

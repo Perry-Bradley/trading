@@ -75,7 +75,14 @@ export default function Signals() {
                         {f.live ? "● " : ""}{f.label}</span>
                     ); })()}
                     <span className="text-sub text-xs">{s.tf || cfg?.tf} · 1:{s.rr?.toFixed(2) ?? cfg?.target_r ?? 2}{s.time ? ` · ${s.time}` : ""}</span>
-                    <a href={`/pairs?p=${s.pair}&tf=${s.tf || "H4"}`} className="text-brand text-xs font-medium ml-auto">view on chart →</a>
+                    <a
+                      href={api.signalChartUrl(s, Date.now())}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-brand text-xs font-medium ml-auto hover:underline"
+                    >
+                      view on chart ↗
+                    </a>
                   </div>
                   <div className="flex items-center gap-3">
                     <div className="w-40"><ConfBar p={s.conf} breakeven={be} /></div>

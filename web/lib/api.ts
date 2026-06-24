@@ -21,6 +21,8 @@ export const api = {
   data: () => j<DataInfo>("/api/data"),
   analysis: (pair: string, tf?: string) => j<Analysis>(`/api/analysis?pair=${pair}${tf ? `&tf=${tf}` : ""}`),
   chartUrl: (pair: string, tf: string, bust = 0) => `${BASE}/api/chart?pair=${pair}&tf=${tf}&t=${bust}`,
+  signalChartUrl: (s: { pair: string; tf?: string; entry: number; stop: number; target: number; direction: string }, bust = 0) =>
+    `${BASE}/api/chart?pair=${s.pair}&tf=${s.tf || "H4"}&entry=${s.entry}&stop=${s.stop}&target=${s.target}&dir=${s.direction}&t=${bust}`,
   backtest: (pair?: string) =>
     j<{ results: BacktestRow[]; seed_state?: string }>(`/api/backtest${pair ? `?pair=${pair}` : ""}`),
   tick: (refresh = false) =>

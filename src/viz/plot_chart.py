@@ -39,7 +39,9 @@ def _candles(ax, df) -> None:
         ax.add_patch(Rectangle((x - 0.3, lo), 0.6, height, color=color, zorder=3))
 
 
-def plot(pair: str, timeframe: str, bars: int, left: int, right: int) -> str:
+def plot(pair: str, timeframe: str, bars: int, left: int, right: int,
+         entry: float | None = None, stop: float | None = None,
+         target: float | None = None, direction: str | None = None) -> str:
     full = load(pair, timeframe)
     res = analyze(full, left, right)
     zones = snr.detect(full, left, right)
@@ -52,7 +54,13 @@ def plot(pair: str, timeframe: str, bars: int, left: int, right: int) -> str:
     pos = {orig: x for x, orig in enumerate(range(start, len(full)))}
     ymin, ymax = view["low"].min(), view["high"].max()
 
-    fig, ax = plt.subplots(figsize=(17, 8.5))
+    # Expand y-range to include signal levels if they're outside the visible window
+    if entry is not None:
+        ymin = min(ymin, entry, stop or entry, target or entry) * 0.9995
+        ymax = max(ymax, entry, stop or entry, target or entry) * 1.0005
+
+    fig, ax = plt.subplots(figsize=(17, 8.5), facecolor="#0e1116")
+    ax.set_facecolor("#131820")
     _candles(ax, view)
 
     # --- SNR zones: only the FRESH (actionable) ones, drawn as clean bands ---
@@ -73,7 +81,7 @@ def plot(pair: str, timeframe: str, bars: int, left: int, right: int) -> str:
         if s.idx < start:
             continue
         x = pos[s.idx]
-        ax.scatter(x, s.price, s=14, color="black", zorder=4)
+        ax.scatter(x, s.price, s=14, color="#8b949e", zorder=4)
         ax.annotate(s.label, (x, s.price), textcoords="offset points",
                     xytext=(0, 7 if s.kind == "H" else -13), ha="center", fontsize=7,
                     color="#1565c0" if s.label in ("HH", "HL") else "#c62828")
@@ -121,18 +129,62 @@ def plot(pair: str, timeframe: str, bars: int, left: int, right: int) -> str:
         ax.annotate(sw.direction.upper(), (x, sw.level), textcoords="offset points",
                     xytext=(3, 2), fontsize=6, color=SWP, fontweight="bold")
 
+    # -----------------------------------------------------------------------
+    # SIGNAL OVERLAY — draws the exact trade setup on the chart
+    # -----------------------------------------------------------------------
+    if entry is not None and stop is not None and target is not None:
+        long = (direction or "long") == "long"
+        entry_c = "#26a69a" if long else "#ef5350"   # teal = long, red = short
+        sl_c    = "#ef5350" if long else "#26a69a"
+        tp_c    = "#26a69a"                          # always green for profit
+
+        # Shaded entry zone (entry price ± half the stop distance)
+        half = abs(entry - stop) * 0.5
+        ax.add_patch(Rectangle((0, entry - half), n, half * 2,
+                               facecolor=entry_c, alpha=0.08, zorder=6, lw=0))
+
+        # Solid entry line
+        ax.hlines(entry, 0, n, color=entry_c, linewidth=1.8, linestyles="-", zorder=7)
+        ax.annotate(f"  ENTRY  {entry:.5f}", (n - 1, entry), fontsize=9,
+                    color=entry_c, va="center", ha="right", fontweight="bold",
+                    bbox=dict(boxstyle="round,pad=0.2", facecolor="#0e1116", alpha=0.8, lw=0))
+
+        # Stop loss — dashed red
+        ax.hlines(stop, 0, n, color=sl_c, linewidth=1.5, linestyles="--", zorder=7)
+        ax.annotate(f"  SL  {stop:.5f}", (n - 1, stop), fontsize=8.5,
+                    color=sl_c, va="center", ha="right",
+                    bbox=dict(boxstyle="round,pad=0.2", facecolor="#0e1116", alpha=0.8, lw=0))
+
+        # Take profit — dashed green
+        ax.hlines(target, 0, n, color=tp_c, linewidth=1.5, linestyles="--", zorder=7)
+        ax.annotate(f"  TP  {target:.5f}", (n - 1, target), fontsize=8.5,
+                    color=tp_c, va="center", ha="right",
+                    bbox=dict(boxstyle="round,pad=0.2", facecolor="#0e1116", alpha=0.8, lw=0))
+
+        rr = abs(target - entry) / abs(entry - stop) if abs(entry - stop) > 0 else 0
+        title = (f"{pair} {timeframe}  ·  {'▲ LONG' if long else '▼ SHORT'}"
+                 f"  ·  Entry {entry:.5f}  SL {stop:.5f}  TP {target:.5f}  (1:{rr:.1f}R)"
+                 f"  ·  SNR · structure · OB/FVG")
+        suffix = f"_sig_{int(entry*1e5)}"
+    else:
+        title = f"{pair} {timeframe} — SNR · structure · rejections · OB/FVG · liquidity sweeps"
+        suffix = "_full"
+
     ticks = range(0, n, max(1, n // 12))
     ax.set_xticks(list(ticks))
-    ax.set_xticklabels([view["time"].iloc[t].strftime("%Y-%m-%d") for t in ticks],
-                       rotation=45, fontsize=8)
-    ax.set_title(f"{pair} {timeframe} — SNR · structure · rejections · OB/FVG · liquidity sweeps")
-    ax.set_ylabel("price")
+    ax.set_xticklabels([view["time"].iloc[t].strftime("%m-%d %H:%M") for t in ticks],
+                       rotation=45, fontsize=8, color="#8b949e")
+    ax.set_title(title, color="#e6edf3", fontsize=10, pad=10)
+    ax.set_ylabel("price", color="#8b949e")
+    ax.tick_params(colors="#8b949e")
+    for spine in ax.spines.values():
+        spine.set_edgecolor("#30363d")
     ax.margins(x=0.01)
-    ax.grid(True, alpha=0.12)
+    ax.grid(True, alpha=0.08, color="#30363d")
     fig.tight_layout()
 
-    out = CHARTS_DIR / f"{pair}_{timeframe}_full.png"
-    fig.savefig(out, dpi=120)
+    out = CHARTS_DIR / f"{pair}_{timeframe}{suffix}.png"
+    fig.savefig(out, dpi=120, facecolor=fig.get_facecolor())
     plt.close(fig)
     print(f"saved {out}")
     return str(out)
