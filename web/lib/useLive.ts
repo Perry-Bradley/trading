@@ -2,7 +2,7 @@
 import { useEffect } from "react";
 
 /** Run `fn` now, on an interval, and whenever a tick completes (msnr:refresh). */
-export function useLive(fn: () => void, ms = 15000) {
+export function useLive(fn: () => void, ms = 30000) {
   useEffect(() => {
     fn();
     const t = setInterval(fn, ms);

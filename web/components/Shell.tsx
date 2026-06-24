@@ -38,7 +38,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     api.config().then(setCfg).catch(() => {});
     poll();
-    const t = setInterval(poll, 15000);
+    const t = setInterval(poll, 30000); // check backend status every 30 s
     return () => clearInterval(t);
   }, [poll]);
 
@@ -91,7 +91,11 @@ export default function Shell({ children }: { children: React.ReactNode }) {
             {cfg && <span className="px-2.5 py-1 rounded-full bg-surface border border-line text-xs text-ink font-medium">{cfg.tf}/{cfg.bias_tf} · {cfg.target_r}R</span>}
             {cfg && <span className="px-2.5 py-1 rounded-full bg-surface border border-line text-xs">{cfg.broker}</span>}
             {cfg && <span className={`px-2.5 py-1 rounded-full text-xs border ${cfg.telegram ? "border-up/40 text-up bg-up/5" : "border-line text-sub"}`}>{cfg.telegram ? "telegram on" : "telegram off"}</span>}
-            <span className="hidden sm:flex items-center gap-1 text-xs text-sub"><span className={`w-2 h-2 rounded-full ${warming ? "bg-warn" : "bg-up"} animate-pulse`} />{warming ? "warming" : "live"}</span>
+            <span className="hidden sm:flex items-center gap-1 text-xs text-sub">
+              <span className={`w-2 h-2 rounded-full ${warming ? "bg-warn" : "bg-up"} animate-pulse`} />
+              {warming ? "warming" : "live"}
+              {when && !warming && <span className="text-[10px] text-sub/60 ml-1">· {when.split(" ")[1]}</span>}
+            </span>
             <div className="ml-auto flex items-center gap-2">
               <button onClick={() => runTick(false)} disabled={!!busy}
                 className="px-3.5 py-1.5 rounded-lg bg-brand text-white text-sm font-medium disabled:opacity-50">

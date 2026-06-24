@@ -637,55 +637,137 @@ def api_tick():
     return jsonify({"status": "running", "seed_state": "warming"})
 
 
-# --- autonomous scheduler: tick on an interval so it trades & learns on its own ---
-TICK_INTERVAL = int(os.environ.get("TICK_INTERVAL", "900"))   # seconds; default 15m
+# ---------------------------------------------------------------------------
+# Real-time tiered data updater
+# ---------------------------------------------------------------------------
+# Strategy:
+#   FAST thread  – updates Binance (BTC) and Deriv (V100, V25) every 60 s.
+#                  No API key required, no rate limits. These stream immediately.
+#   SLOW thread  – cycles through all TwelveData forex pairs one-by-one,
+#                  waiting 8 s between each call (free tier: 8 req/min).
+#                  A full forex rotation completes in ~2 min.
+#   After every data update the engine tick + signal scan runs so the
+#   dashboard reflects the freshest data without any user interaction.
+# ---------------------------------------------------------------------------
+TICK_INTERVAL = int(os.environ.get("TICK_INTERVAL", "60"))  # fast-loop interval (s)
 _sched_started = [False]
+
+_LIVE_PAIRS = {  # pairs grouped by their data source
+    "fast": [],   # filled at runtime from config
+    "slow": [],
+}
+
+
+def _get_live_groups():
+    """Split config.PAIRS into fast (Binance/Deriv) and slow (TwelveData)."""
+    from src.data.fetch import source_for
+    fast, slow = [], []
+    for pr in config.PAIRS:
+        src = source_for(pr)
+        if src in ("binance", "deriv"):
+            fast.append(pr)
+        else:
+            slow.append(pr)
+    return fast, slow
+
+
+def _refresh_pair(pr: str, tfs=None) -> None:
+    """Download fresh data for one pair across all entry timeframes."""
+    from src.data import fetch
+    tfs = tfs or ["H4", "H1", "M30", BIAS_TF]
+    for tf in set(tfs):
+        try:
+            fetch.save(pr, tf)
+        except Exception as e:  # noqa: BLE001
+            print(f"  [updater] {pr} {tf} fetch failed: {e}")
+
+
+def _rescan_and_save() -> None:
+    """Re-run the signal scan and save the result so /api/status serves fresh data."""
+    import datetime as _dt
+    try:
+        if not _seeded():
+            return
+        sigs = sorted(_scan_only(), key=lambda s: -s.get("conf", 0))[:20]
+        last = _load_last()
+        last["signals"] = sigs
+        last["when"] = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        LAST_TICK.write_text(json.dumps(last, indent=2, default=str))
+    except Exception as e:  # noqa: BLE001
+        print(f"  [updater] rescan failed: {e}")
+
+
+def _fast_updater() -> None:
+    """Thread: updates Binance + Deriv pairs every 60 s — no rate limit."""
+    # Wait for initial seed
+    for _ in range(180):
+        if _seeded():
+            break
+        time.sleep(5)
+    fast, _ = _get_live_groups()
+    print(f"[fast-updater] live pairs: {fast} — polling every 60s")
+    while True:
+        for pr in fast:
+            _refresh_pair(pr)
+        _rescan_and_save()
+        print(f"[fast-updater] tick done ({', '.join(fast)})")
+        time.sleep(60)  # Binance/Deriv have no rate limits
+
+
+def _slow_updater() -> None:
+    """Thread: cycles through TwelveData forex pairs one-by-one (8 req/min limit).
+    
+    Each pair needs ~4 TF calls × 8 s gap = 32 s per pair.
+    All 11 forex pairs complete in ~6 min. Data is always < 6 min stale.
+    """
+    # Wait for initial seed
+    for _ in range(180):
+        if _seeded():
+            break
+        time.sleep(5)
+    _, slow = _get_live_groups()
+    print(f"[slow-updater] forex pairs: {slow} — cycling at 8 req/min (TwelveData)")
+    idx = 0
+    while True:
+        if not slow:
+            time.sleep(60)
+            _, slow = _get_live_groups()  # re-check in case config changed
+            continue
+        pr = slow[idx % len(slow)]
+        _refresh_pair(pr)
+        _rescan_and_save()
+        print(f"[slow-updater] updated {pr}")
+        idx += 1
+        # 4 TF calls × 8 s = 32 s minimum; sleep the remainder to avoid bursting
+        time.sleep(max(32, 8 * 4))
 
 
 def _scheduler() -> None:
-    # Wait for data+model to be seeded, then run an IMMEDIATE first tick so the
-    # dashboard fills in right after deploy (instead of waiting a whole interval).
+    # Legacy method: kept for the initial full tick on startup.
+    # Wait for data+model to be seeded, then run an immediate tick so the
+    # dashboard fills in right after deploy.
     for _ in range(180):
         if _seeded():
             break
         time.sleep(5)
     try:
         _run_and_cache(refresh=True)
-        print("[scheduler] initial tick done")
+        print("[scheduler] initial full tick done")
     except Exception as e:  # noqa: BLE001
         print(f"[scheduler] initial tick error: {e}")
-    while True:
-        # Use the shorter of TICK_INTERVAL or 600s (10 min) so live pairs
-        # (Binance/Deriv) update frequently. TwelveData forex will be fetched
-        # on a per-pair basis within engine.tick respecting the 8 req/min cap.
-        interval = min(max(60, TICK_INTERVAL), 600)
-        time.sleep(interval)
-        try:
-            import datetime as _dt
-            # Check if any data file is stale (> 30 min old) — if so, refresh
-            stale = False
-            try:
-                last_mtime = max(
-                    (f.stat().st_mtime for f in config.DATA_DIR.glob("*.parquet")),
-                    default=0
-                )
-                age_min = (_dt.datetime.now().timestamp() - last_mtime) / 60
-                stale = age_min > 30
-                if stale:
-                    print(f"[scheduler] data is {age_min:.0f}min old — refreshing")
-            except Exception:
-                pass
-            _run_and_cache(refresh=stale)
-            print("[scheduler] autonomous tick done")
-        except Exception as e:  # noqa: BLE001
-            print(f"[scheduler] tick error: {e}")
+
 
 
 def _start_scheduler() -> None:
-    if TICK_INTERVAL > 0 and not _sched_started[0]:
+    if not _sched_started[0]:
         _sched_started[0] = True
-        threading.Thread(target=_scheduler, daemon=True).start()
-        print(f"[scheduler] autonomous ticks every {TICK_INTERVAL}s")
+        # 1. Initial full tick (runs once after seeding, fills the dashboard immediately)
+        threading.Thread(target=_scheduler, daemon=True, name="scheduler-init").start()
+        # 2. Fast loop: Binance + Deriv updated every 60 s (no rate limit)
+        threading.Thread(target=_fast_updater, daemon=True, name="updater-fast").start()
+        # 3. Slow loop: TwelveData forex, one pair per ~32 s (8 req/min)
+        threading.Thread(target=_slow_updater, daemon=True, name="updater-slow").start()
+        print("[scheduler] tiered real-time updater started: fast=60s, slow=8req/min forex cycle")
 
 
 _DATA_CACHE = {"t": 0.0, "data": None}
