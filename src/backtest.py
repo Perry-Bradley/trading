@@ -389,51 +389,67 @@ def signals(pair: str, tf: str = "H4", bias_tf: str = "D1", target_r: float = 2.
     bias = _htf_bias_array(df, load(pair, bias_tf)) if bias_tf else _htf_bias_array(df, df)
     ctx = _build_feature_context(df, atr_arr, left, right)
 
-    taps: dict[int, list] = {}
-    for z in zones:
-        if z.first_touch_idx is not None:
-            taps.setdefault(z.first_touch_idx, []).append(z)
-
+    # --- Live signal scan: any zone tap in the lookback window ---
+    # The old first_touch_idx approach missed zones tapped recently but first-touched long ago.
+    # Now we check EVERY bar in the lookback window for: bias + rejection + zone tap + R:R.
     out = []
+    seen_zones: set[int] = set()  # avoid reporting same zone twice in one scan
+
     for i in range(max(0, n - lookback), n):
         b = bias[i]
-        if b == 0 or i not in taps:
+        if b == 0:
             continue
         want = "support" if b > 0 else "resistance"
         trig = bull_rej[i] if b > 0 else bear_rej[i]
-        zone = next((z for z in taps[i] if z.kind == want and z.is_valid_at(i) and trig), None)
-        if zone is None:
-            continue
-        a = atr_arr[i] if atr_arr[i] > 0 else (h[i] - l[i])
-        entry = c[i]
-        if b > 0:
-            stop = zone.bottom - sl_buffer_atr * a
-            risk = entry - stop
-        else:
-            stop = zone.top + sl_buffer_atr * a
-            risk = stop - entry
-        if risk <= 0:
-            continue
-            
-        fta = _get_fta(i, b, entry, df, zones, ctx)
-        if fta == 0.0:
-            continue
-            
-        target = fta
-        dynamic_rr = ((target - entry) if b > 0 else (entry - target)) / risk
-        if dynamic_rr < target_r: # Minimum R:R
-            continue
-            
-        feats = _features(ctx, df, i, b, zone, a, rej_strength[i])
-        feats["direction"] = 1 if b > 0 else 0           # match dataset feature set
-        feats["tf_minutes"] = {"M30": 30, "H1": 60, "H4": 240, "D1": 1440}[tf]
-        out.append({
-            "pair": pair, "tf": tf, "bias_tf": bias_tf,
-            "time": df.index[i], "age_bars": (n - 1) - i,   # 0 = current bar
-            "direction": "long" if b > 0 else "short",
-            "entry": entry, "stop": stop, "target": target, "rr": round(dynamic_rr, 2),
-            "features": feats,
-        })
+        if not trig:
+            continue  # no rejection candle
+
+        for z in zones:
+            if z.kind != want:
+                continue
+            if not z.is_valid_at(i):
+                continue
+            if id(z) in seen_zones:
+                continue
+            # Price must touch the zone on bar i
+            if b > 0:
+                touched = l[i] <= z.top and h[i] >= z.bottom
+            else:
+                touched = h[i] >= z.bottom and l[i] <= z.top
+            if not touched:
+                continue
+
+            a = atr_arr[i] if atr_arr[i] > 0 else (h[i] - l[i])
+            entry = c[i]
+            if b > 0:
+                stop = z.bottom - sl_buffer_atr * a
+                risk = entry - stop
+            else:
+                stop = z.top + sl_buffer_atr * a
+                risk = stop - entry
+            if risk <= 0:
+                continue
+
+            fta = _get_fta(i, b, entry, df, zones, ctx)
+            if fta == 0.0:
+                continue
+
+            target = fta
+            dynamic_rr = ((target - entry) if b > 0 else (entry - target)) / risk
+            if dynamic_rr < target_r:  # minimum R:R gate
+                continue
+
+            feats = _features(ctx, df, i, b, z, a, rej_strength[i])
+            feats["direction"] = 1 if b > 0 else 0
+            feats["tf_minutes"] = {"M30": 30, "H1": 60, "H4": 240, "D1": 1440}[tf]
+            seen_zones.add(id(z))
+            out.append({
+                "pair": pair, "tf": tf, "bias_tf": bias_tf,
+                "time": df.index[i], "age_bars": (n - 1) - i,
+                "direction": "long" if b > 0 else "short",
+                "entry": entry, "stop": stop, "target": target, "rr": round(dynamic_rr, 2),
+                "features": feats,
+            })
     return out
 
 
