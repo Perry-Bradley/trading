@@ -389,36 +389,62 @@ def signals(pair: str, tf: str = "H4", bias_tf: str = "D1", target_r: float = 2.
     bias = _htf_bias_array(df, load(pair, bias_tf)) if bias_tf else _htf_bias_array(df, df)
     ctx = _build_feature_context(df, atr_arr, left, right)
 
-    # --- Live signal scan: any zone tap in the lookback window ---
-    # The old first_touch_idx approach missed zones tapped recently but first-touched long ago.
-    # Now we check EVERY bar in the lookback window for: bias + rejection + zone tap + R:R.
+    # --- Live signal scan: MSNR tap + rejection within 2-bar window ---
+    #
+    # The MSNR/JetFX setup (Lesson 9):
+    #   1. HTF bias confirmed
+    #   2. Price taps into a fresh SNR zone (wick entry — low <= zone.top for support,
+    #      high >= zone.bottom for resistance)
+    #   3. A rejection candle forms on the TAP bar OR within 2 bars after (confirmation candle)
+    #   4. Dynamic R:R to First Trouble Area must be >= target_r
+    #
+    # Key fix: zone touch only needs ONE side of the bar to enter the zone band,
+    # NOT the bar to span the whole zone. Rejection allowed ±2 bars from tap.
+
     out = []
-    seen_zones: set[int] = set()  # avoid reporting same zone twice in one scan
+    seen_zones: set[int] = set()
 
-    for i in range(max(0, n - lookback), n):
-        b = bias[i]
-        if b == 0:
+    scan_start = max(0, n - lookback)
+
+    for z in zones:
+        if id(z) in seen_zones:
             continue
-        want = "support" if b > 0 else "resistance"
-        trig = bull_rej[i] if b > 0 else bear_rej[i]
-        if not trig:
-            continue  # no rejection candle
 
-        for z in zones:
+        # Find all bars in the lookback window where price taps this zone
+        for tap_i in range(scan_start, n):
+            b = bias[tap_i]
+            if b == 0:
+                continue
+            want = "support" if b > 0 else "resistance"
             if z.kind != want:
                 continue
-            if not z.is_valid_at(i):
-                continue
-            if id(z) in seen_zones:
-                continue
-            # Price must touch the zone on bar i
-            if b > 0:
-                touched = l[i] <= z.top and h[i] >= z.bottom
-            else:
-                touched = h[i] >= z.bottom and l[i] <= z.top
-            if not touched:
+            if not z.is_valid_at(tap_i):
                 continue
 
+            # Zone touch: just one side of bar needs to enter zone
+            # For support: low dips into zone top (price enters from above)
+            # For resistance: high pokes into zone bottom (price enters from below)
+            if b > 0:
+                tap_ok = l[tap_i] <= z.top   # support: low touches zone
+            else:
+                tap_ok = h[tap_i] >= z.bottom  # resistance: high touches zone
+            if not tap_ok:
+                continue
+
+            # Find rejection candle: on tap bar itself OR within 2 bars after
+            rej_i = None
+            for k in range(tap_i, min(n, tap_i + 3)):
+                if b > 0 and bull_rej[k]:
+                    rej_i = k
+                    break
+                elif b < 0 and bear_rej[k]:
+                    rej_i = k
+                    break
+            if rej_i is None:
+                continue
+
+            # Signal fires at rejection bar (entry = close of rejection candle)
+            i = rej_i
             a = atr_arr[i] if atr_arr[i] > 0 else (h[i] - l[i])
             entry = c[i]
             if b > 0:
@@ -436,7 +462,7 @@ def signals(pair: str, tf: str = "H4", bias_tf: str = "D1", target_r: float = 2.
 
             target = fta
             dynamic_rr = ((target - entry) if b > 0 else (entry - target)) / risk
-            if dynamic_rr < target_r:  # minimum R:R gate
+            if dynamic_rr < target_r:
                 continue
 
             feats = _features(ctx, df, i, b, z, a, rej_strength[i])
@@ -450,6 +476,8 @@ def signals(pair: str, tf: str = "H4", bias_tf: str = "D1", target_r: float = 2.
                 "entry": entry, "stop": stop, "target": target, "rr": round(dynamic_rr, 2),
                 "features": feats,
             })
+            break  # one signal per zone
+
     return out
 
 
