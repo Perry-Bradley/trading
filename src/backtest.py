@@ -86,34 +86,113 @@ def _build_feature_context(df: pd.DataFrame, atr_arr, left, right) -> dict:
         "sweeps": smc.liquidity_sweeps(df, left, right),
         "obs": smc.order_blocks(df, left, right),
         "fvgs": smc.fair_value_gaps(df),
+        "qmls": smc.quasimodos(df, left, right),
         "atr_med": pd.Series(atr_arr).rolling(100, min_periods=20).median().to_numpy(),
     }
 
 
 def _features(ctx, df, i, bias, zone, atr_i, rej_strength, K=10) -> dict:
-    """Causal features known at the trigger bar i (uses only data with idx <= i)."""
+    """Causal features known at the trigger bar i (uses only data with idx <= i).
+
+    Implements the full JetFX MSNR X-Factor confluence stack:
+    - HTF bias + CHoCH (structure shift)
+    - Liquidity sweep (stop hunt before the move)
+    - Order block / FVG overlap at the SNR zone
+    - Quasimodo (3rd touch = commitment)
+    - Premium/Discount zone (buy cheap, sell expensive)
+    - Session timing (London 08-10 / NY 13:30-15:30 UTC)
+    - Engulfing candle at the zone
+    - Flipped SNR level (RBS/SBR — strongest per course)
+    """
     h = df["high"].to_numpy(); l = df["low"].to_numpy()
-    # recent aligned CHoCH (entry-TF structure) and trend maturity
+    o = df["open"].to_numpy(); c = df["close"].to_numpy()
+
+    # --- existing features ---
     choch_recent = any(idx <= i and idx >= i - K and d == bias for idx, d in ctx["chochs"])
     last_choch = max((idx for idx, _ in ctx["chochs"] if idx <= i), default=i)
     trend_age = i - last_choch
-    # recent aligned liquidity sweep (ssl feeds longs, bsl feeds shorts)
     want_sweep = "ssl" if bias > 0 else "bsl"
     sweep_recent = any(i - K <= s.idx <= i and s.direction == want_sweep for s in ctx["sweeps"])
-    # order block / FVG confluence overlapping the SNR zone, created on/before i
     want_zone = "bullish" if bias > 0 else "bearish"
     ob_conf = any(ob.idx <= i and ob.kind == want_zone
                   and ob.bottom <= zone.top and zone.bottom <= ob.top for ob in ctx["obs"])
+    # fvg_in_zone: FVG must actually OVERLAP the SNR zone band (not just be nearby)
     fvg_conf = any(f.idx <= i and f.kind == want_zone
-                   and f.bottom <= zone.top and zone.bottom <= f.top for f in ctx["fvgs"])
-    # depth of the rejecting wick into the zone, in ATR
+                   and f.bottom < zone.top and zone.bottom < f.top for f in ctx["fvgs"])
     if bias > 0:
         depth = (zone.top - l[i]) / atr_i
     else:
         depth = (h[i] - zone.bottom) / atr_i
     atr_med = ctx["atr_med"][i]
     t = df.index[i]
+
+    # --- NEW FEATURE 1: Quasimodo at the zone (3rd touch = highest conviction) ---
+    qml_want = "bullish" if bias > 0 else "bearish"
+    qml_at_zone = any(
+        q.idx <= i and q.idx >= i - K and q.kind == qml_want
+        and zone.bottom <= q.sweep_level <= zone.top
+        for q in ctx["qmls"]
+    )
+
+    # --- NEW FEATURE 2: Premium / Discount zone check ---
+    # Find the swing high and low over the last 100 bars (the range)
+    lookback_range = max(0, i - 100)
+    swing_high = float(df["high"].iloc[lookback_range:i + 1].max())
+    swing_low = float(df["low"].iloc[lookback_range:i + 1].min())
+    eq = (swing_high + swing_low) / 2.0
+    if swing_high > swing_low:
+        if bias > 0:   # long: we want price to be in DISCOUNT (below 50%)
+            premium_discount = (eq - zone.mid()) / (swing_high - swing_low)   # +1 = deep discount
+        else:          # short: we want price to be in PREMIUM (above 50%)
+            premium_discount = (zone.mid() - eq) / (swing_high - swing_low)   # +1 = deep premium
+        premium_discount = float(max(-1.0, min(1.0, premium_discount)))
+    else:
+        premium_discount = 0.0
+
+    # --- NEW FEATURE 3: Session timing (London 07-10 UTC, NY 13:30-16 UTC) ---
+    # Course: GCE works best at London open 08-10am and NY session 13:30-14:30 UK time
+    try:
+        utc_hour = t.tz_localize("UTC").hour if t.tzinfo is None else t.tz_convert("UTC").hour
+    except Exception:
+        utc_hour = t.hour
+    london = 7 <= utc_hour < 10
+    new_york = 13 <= utc_hour < 16
+    session_score = int(london or new_york)
+
+    # --- NEW FEATURE 4: Engulfing candle at the zone ---
+    # Bullish engulf: bar i's close > bar i-1's open AND bar i's open < bar i-1's close (full body wrap)
+    engulf_at_zone = False
+    if i >= 1:
+        if bias > 0:  # look for bullish engulf at support zone
+            engulf_at_zone = bool(
+                c[i] > o[i - 1] and o[i] < c[i - 1]   # body wraps prior candle
+                and c[i] > o[i]                         # closes bullish
+                and l[i] <= zone.top                    # actually touched the zone
+            )
+        else:         # look for bearish engulf at resistance zone
+            engulf_at_zone = bool(
+                c[i] < o[i - 1] and o[i] > c[i - 1]
+                and c[i] < o[i]
+                and h[i] >= zone.bottom
+            )
+
+    # --- NEW FEATURE 5: Flipped SNR level (RBS/SBR — course says these are strongest) ---
+    flipped_level = int(zone.flipped)
+
+    # --- NEW FEATURE 6: Wick-to-body ratio (precise rejection quality) ---
+    candle_range = h[i] - l[i]
+    if candle_range > 0:
+        body_size = abs(c[i] - o[i])
+        if bias > 0:
+            rej_wick = l[i] - min(o[i], c[i]) if False else (min(o[i], c[i]) - l[i])
+        else:
+            rej_wick = h[i] - max(o[i], c[i])
+        rej_wick_ratio = float(rej_wick / candle_range)
+    else:
+        rej_wick_ratio = 0.0
+
     return {
+        # existing
         "rej_strength": float(rej_strength),
         "zone_width_atr": float((zone.top - zone.bottom) / atr_i),
         "zone_age": float(i - zone.anchor_idx),
@@ -126,6 +205,13 @@ def _features(ctx, df, i, bias, zone, atr_i, rej_strength, K=10) -> dict:
         "trend_age": float(min(trend_age, 200)),
         "hour": float(t.hour),
         "dow": float(t.dayofweek),
+        # NEW
+        "qml_at_zone": int(qml_at_zone),
+        "premium_discount": premium_discount,
+        "session_score": session_score,
+        "engulf_at_zone": int(engulf_at_zone),
+        "flipped_level": flipped_level,
+        "rej_wick_ratio": rej_wick_ratio,
     }
 
 

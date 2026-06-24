@@ -19,8 +19,9 @@ from src.detectors.candles import anatomy
 
 def detect(
     df: pd.DataFrame,
-    wick_frac: float = 0.5,   # rejecting wick must be >= this fraction of the range
-    body_max: float = 0.4,    # body no larger than this fraction of the range
+    wick_frac: float = 0.45,  # rejecting wick must be >= this fraction of the range
+    body_max: float = 0.65,   # body no larger than this fraction (relaxed from 0.4 — real
+                              # hammer/shooting-star candles often have a body up to 60%)
     close_part: float = 0.5,  # close must be in the favourable half of the range
 ) -> pd.DataFrame:
     """Return a frame indexed like df with columns:

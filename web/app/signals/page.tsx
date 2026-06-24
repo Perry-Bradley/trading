@@ -60,6 +60,16 @@ export default function Signals() {
                   <div className="flex items-center gap-2.5 flex-wrap">
                     <span className="text-lg font-bold">{s.pair}</span>
                     <DirBadge dir={s.direction} />
+                    {/* Timeframe badge */}
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-brand/10 text-brand">{s.tf || "H4"}</span>
+                    {/* TF Alignment badge */}
+                    {(s as any).tf_aligned && (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-up/10 text-up">✓ TF ALIGNED</span>
+                    )}
+                    {/* Session timing badge */}
+                    {s.features?.session_score === 1 && (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-yellow-500/10 text-yellow-400">SESSION</span>
+                    )}
                     {(() => { const f = freshness(s); return (
                       <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${f.live ? "bg-up/10 text-up" : "bg-line text-sub"}`}>
                         {f.live ? "● " : ""}{f.label}</span>

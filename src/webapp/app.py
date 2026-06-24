@@ -57,8 +57,10 @@ def _seed() -> None:
     try:
         from src.data import fetch
         from src.ml.online import OnlinePolicy
+        # Fetch all timeframes needed: bias TF + entry TFs (H4, H1, M30)
+        entry_tfs = ["H4", "H1", "M30"]
         for pr in config.PAIRS:
-            for t in {TF, BIAS_TF}:
+            for t in {BIAS_TF} | set(entry_tfs):
                 if not (config.DATA_DIR / f"{pr}_{t}.parquet").exists():
                     try:
                         fetch.save(pr, t)
@@ -183,7 +185,7 @@ def do_tick():
 
 
 def _reason(s: dict) -> dict:
-    """Human-readable 'why' for a signal, from its causal features (the SMC story)."""
+    """Human-readable 'why' for a signal, from its causal features (the full SMC/MSNR story)."""
     f = s.get("features", {})
     bias = "bullish" if s["direction"] == "long" else "bearish"
     kind = "demand (support)" if s["direction"] == "long" else "supply (resistance)"
@@ -195,16 +197,50 @@ def _reason(s: dict) -> dict:
     if f.get("ob_conf"):
         conf.append("order block at the zone")
     if f.get("fvg_conf"):
-        conf.append("fair value gap nearby")
-    if f.get("rej_strength", 0) >= 0.6:
-        conf.append("strong rejection candle")
+        conf.append("fair value gap in zone")
+    if f.get("qml_at_zone"):
+        conf.append("Quasimodo (3rd touch — institutional commitment)")
+    if f.get("engulf_at_zone"):
+        conf.append("engulfing candle at the zone")
+    if f.get("flipped_level"):
+        conf.append("flipped SNR level (RBS/SBR — strongest type)")
+    if f.get("session_score"):
+        conf.append("London/NY session (prime trading window)")
+    pd_val = f.get("premium_discount", 0)
+    if pd_val > 0.15:
+        conf.append(f"in {'discount' if s['direction'] == 'long' else 'premium'} zone (+{pd_val:.0%})")
+    if f.get("rej_strength", 0) >= 0.55:
+        conf.append(f"strong rejection wick ({f.get('rej_wick_ratio', 0):.0%} of range)")
+    if s.get("tf_aligned"):
+        conf.append(f"multi-TF aligned ({s.get('aligned_tf', '')})")
     why = (f"{bias.title()} {s['tf']} bias into a fresh {kind} SNR level, confirmed by a "
            f"rejection candle" + (". Confluences: " + ", ".join(conf) if conf else "."))
     return {"why": why, "confluences": conf, "tf": s.get("tf", TF)}
 
 
+# Maximum signal age in bars per timeframe (per JetFX: intraday = hours, not days)
+_TF_MAX_AGE = {"H4": 6, "H1": 6, "M30": 8}   # H4→24h, H1→6h, M30→4h
+_ENTRY_TFS = ["H4", "H1", "M30"]              # scan all three
+
+
+def _ltf_zones(pr: str, ltf: str) -> list:
+    """Load SNR zones for a lower TF (for multi-TF alignment check). Returns [] on error."""
+    try:
+        from src.data.fetch import load
+        from src.detectors import snr
+        df = load(pr, ltf)
+        return snr.detect(df)
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def _scan_only() -> list:
-    """Current signals across pairs (read-only) for display, scored by the policy.
+    """Current signals across ALL entry timeframes (H4, H1, M30) and all pairs.
+
+    MSNR multi-TF rule (course ch.17):
+      H4 zones must overlap with an H1 fresh zone.
+      H1 zones must overlap with an M30 fresh zone.
+    Signals are age-filtered per-TF so only intraday setups reach the dashboard.
     Never raises — returns [] until data + model are seeded."""
     if not _seeded():
         return []
@@ -214,24 +250,66 @@ def _scan_only() -> list:
         pol = OnlinePolicy.load_or_bootstrap(TARGET_R)
     except Exception:  # noqa: BLE001
         return []
+
+    # Build LTF zone caches for multi-TF alignment (loaded once per pair)
+    ltf_cache: dict[tuple, list] = {}
+
     out = []
     for pr in config.PAIRS:
-        try:
-            # only the most recent bars so the page shows fresh (hours-old) setups,
-            # not multi-day-old ones. ~12 H4 bars ≈ the last ~2 days.
-            for s in backtest.signals(pr, TF, BIAS_TF, TARGET_R, lookback=12):
-                if s.get("age_bars", 999) > 6:
-                    continue   # only show signals from the last ~24h (on H4)
-                p = pol.proba(vec(s["features"]))
-                s["conf"], s["size"] = p, pol.size(p)
-                s["time"] = str(s.get("time", ""))[:16]
-                s.update(_reason(s))
-                out.append({k: s[k] for k in ("pair", "direction", "entry", "stop", "target",
-                                              "conf", "size", "features", "why", "confluences",
-                                              "tf", "time", "age_bars")})
-        except Exception:  # noqa: BLE001
-            continue
-    out.sort(key=lambda s: s.get("age_bars", 999))   # freshest first
+        for entry_tf in _ENTRY_TFS:
+            try:
+                max_age = _TF_MAX_AGE.get(entry_tf, 6)
+                for s in backtest.signals(pr, entry_tf, BIAS_TF, TARGET_R, lookback=max_age + 4):
+                    if s.get("age_bars", 999) > max_age:
+                        continue
+
+                    # --- Multi-TF alignment check (MSNR course rule) ---
+                    ltf_map = {"H4": "H1", "H1": "M30"}   # H4 aligns with H1; H1 aligns with M30
+                    align_tf = ltf_map.get(entry_tf)
+                    tf_aligned = False
+                    aligned_tf = ""
+                    if align_tf:
+                        key = (pr, align_tf)
+                        if key not in ltf_cache:
+                            ltf_cache[key] = _ltf_zones(pr, align_tf)
+                        ltf_zones = ltf_cache[key]
+                        # Check if any LTF fresh zone overlaps the signal's entry/stop range
+                        entry_p, stop_p = s["entry"], s["stop"]
+                        zone_lo = min(entry_p, stop_p)
+                        zone_hi = max(entry_p, stop_p)
+                        ltf_n = None
+                        try:
+                            from src.data.fetch import load
+                            ltf_n = len(load(pr, align_tf))
+                        except Exception:  # noqa: BLE001
+                            pass
+                        for z in ltf_zones:
+                            if ltf_n and not z.is_fresh_at(ltf_n - 1):
+                                continue
+                            if z.bottom <= zone_hi and z.top >= zone_lo:
+                                tf_aligned = True
+                                aligned_tf = align_tf
+                                break
+
+                    s["tf_aligned"] = tf_aligned
+                    s["aligned_tf"] = aligned_tf
+
+                    p = pol.proba(vec(s["features"]))
+                    # Confidence boost for multi-TF alignment (course: highest quality)
+                    if tf_aligned:
+                        p = min(0.99, p * 1.15)
+                    s["conf"], s["size"] = p, pol.size(p)
+                    s["time"] = str(s.get("time", ""))[:16]
+                    s.update(_reason(s))
+                    out.append({k: s[k] for k in (
+                        "pair", "direction", "entry", "stop", "target",
+                        "conf", "size", "features", "why", "confluences",
+                        "tf", "time", "age_bars", "tf_aligned", "aligned_tf"
+                    )})
+            except Exception:  # noqa: BLE001
+                continue
+    # Sort: multi-TF aligned first, then by confidence
+    out.sort(key=lambda s: (-int(s.get("tf_aligned", False)), -s.get("conf", 0)))
     return out
 
 
