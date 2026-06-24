@@ -74,13 +74,13 @@ export default function Signals() {
                       <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${f.live ? "bg-up/10 text-up" : "bg-line text-sub"}`}>
                         {f.live ? "● " : ""}{f.label}</span>
                     ); })()}
-                    <span className="text-sub text-xs">{s.tf || cfg?.tf} · 1:{cfg?.target_r ?? 2}{s.time ? ` · ${s.time}` : ""}</span>
+                    <span className="text-sub text-xs">{s.tf || cfg?.tf} · 1:{s.rr?.toFixed(2) ?? cfg?.target_r ?? 2}{s.time ? ` · ${s.time}` : ""}</span>
                     <a href={`/pairs?p=${s.pair}`} className="text-brand text-xs font-medium ml-auto">view on chart →</a>
                   </div>
                   <div className="flex items-center gap-3">
                     <div className="w-40"><ConfBar p={s.conf} breakeven={be} /></div>
                     <span className={`text-xs font-bold px-2.5 py-1 rounded-lg ${take ? "bg-up/10 text-up" : "bg-line text-sub"}`}>
-                      {take ? "TAKE" : "WATCH"} · {s.size.toFixed(2)}x
+                      {take ? "TAKE" : "WATCH"}
                     </span>
                   </div>
                 </div>

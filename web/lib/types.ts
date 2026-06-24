@@ -32,6 +32,7 @@ export type Signal = {
   entry: number;
   stop: number;
   target: number;
+  rr?: number;
   conf: number;
   size: number;
   tf?: string;
@@ -39,6 +40,7 @@ export type Signal = {
   age_bars?: number;
   why?: string;
   confluences?: string[];
+  features?: Record<string, any>;
 };
 
 export type Position = {
