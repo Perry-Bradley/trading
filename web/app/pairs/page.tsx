@@ -30,6 +30,7 @@ export default function Pairs() {
   const [bt, setBt] = useState<BacktestRow | null>(null);
   const [btBusy, setBtBusy] = useState(false);
   const [bust, setBust] = useState(0);
+  const [analysisErr, setAnalysisErr] = useState<string | null>(null);
 
   useEffect(() => {
     api.config().then((c) => {
@@ -42,9 +43,17 @@ export default function Pairs() {
     }).catch(() => {});
   }, []);
 
+  const [analysisErr, setAnalysisErr] = useState<string | null>(null);
+
   const load = useCallback(async () => {
     if (!sel || !selTf) return;
-    try { setA(await api.analysis(sel, selTf)); setBust(Date.now()); } catch { /* */ }
+    try {
+      setAnalysisErr(null);
+      setA(await api.analysis(sel, selTf));
+      setBust(Date.now());
+    } catch (e: any) {
+      setAnalysisErr(e?.message ?? "Failed to load analysis");
+    }
   }, [sel, selTf]);
   useLive(load);
 
@@ -99,8 +108,13 @@ export default function Pairs() {
           <Section title="Annotated chart" right={<span className="text-sub text-xs">SNR zones · structure · rejections</span>}>
             {cfg && (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={api.chartUrl(a.pair, a.tf, bust)} alt={`${a.pair} chart`}
-                className="w-full rounded-xl border border-line bg-white" />
+              <img
+                key={`${a.pair}-${selTf}-${bust}`}
+                src={api.chartUrl(a.pair, selTf || a.tf, bust)}
+                alt={`${a.pair} chart`}
+                className="w-full rounded-xl border border-line bg-surface"
+                onError={(e) => { (e.target as HTMLImageElement).alt = `Chart unavailable for ${a.pair} ${selTf} — data is being fetched in the background`; }}
+              />
             )}
           </Section>
 

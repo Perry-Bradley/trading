@@ -907,19 +907,58 @@ def api_analysis():
 
 @app.route("/api/chart")
 def api_chart():
-    """Server-rendered annotated chart PNG (SNR zones + structure + rejections)."""
+    """Server-rendered annotated chart PNG (SNR zones + structure + rejections).
+    
+    Auto-fetches missing data if not yet downloaded. Always returns a PNG
+    (error message drawn on the image if something goes wrong).
+    """
     pair = request.args.get("pair", config.PAIRS[0])
     tf = request.args.get("tf", TF)
     if pair not in config.PAIRS or tf not in config.TIMEFRAMES:
         return ("bad params", 400)
-    if not _seeded():
-        return ("warming", 503)
+    
+    # Auto-fetch if the parquet file doesn't exist yet
+    data_path = config.DATA_DIR / f"{pair}_{tf}.parquet"
+    if not data_path.exists():
+        try:
+            from src.data import fetch
+            fetch.save(pair, tf)
+            print(f"[api_chart] auto-fetched {pair} {tf}")
+        except Exception as e:  # noqa: BLE001
+            # Return an informative placeholder PNG
+            return _chart_placeholder(pair, tf, f"Fetching data… ({e})")
+    
     try:
         from src.viz.plot_chart import plot
         path = plot(pair, tf, bars=140, left=3, right=3)
         return send_file(path, mimetype="image/png")
+    except FileNotFoundError:
+        return _chart_placeholder(pair, tf, "No data yet — click Refresh + tick")
     except Exception as e:  # noqa: BLE001
-        return (str(e), 500)
+        return _chart_placeholder(pair, tf, str(e))
+
+
+def _chart_placeholder(pair: str, tf: str, msg: str):
+    """Return a simple dark PNG with an informative message instead of a broken image."""
+    import io
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(figsize=(14, 5), facecolor="#0e1116")
+    ax.set_facecolor("#0e1116")
+    ax.text(0.5, 0.6, f"{pair} {tf}", transform=ax.transAxes,
+            ha="center", va="center", fontsize=24, color="#e6edf3", fontweight="bold")
+    ax.text(0.5, 0.35, msg, transform=ax.transAxes,
+            ha="center", va="center", fontsize=13, color="#8b949e")
+    ax.text(0.5, 0.18, "Data will appear automatically as the background updater fetches it.",
+            transform=ax.transAxes, ha="center", va="center", fontsize=10, color="#484f58")
+    ax.axis("off")
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=90, bbox_inches="tight", facecolor=fig.get_facecolor())
+    plt.close(fig)
+    buf.seek(0)
+    return send_file(buf, mimetype="image/png")
 
 
 _start_scheduler()   # begin autonomous ticking (set TICK_INTERVAL=0 to disable)
