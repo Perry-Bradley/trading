@@ -43,7 +43,6 @@ export default function Pairs() {
     }).catch(() => {});
   }, []);
 
-  const [analysisErr, setAnalysisErr] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!sel || !selTf) return;
