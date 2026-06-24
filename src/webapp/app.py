@@ -281,10 +281,10 @@ def _reason(s: dict) -> dict:
 
 
 # Maximum signal age in bars per timeframe
-# H4: 12 bars = 48h (2 days)  H1: 24 bars = 24h  M30: 32 bars = 16h
-# Calendar cap: signals older than 24h wall-clock are dropped from the live dashboard.
-_TF_MAX_AGE = {"H4": 12, "H1": 24, "M30": 32}
-_SIGNAL_MAX_AGE_HOURS = 24   # never show a signal whose candle is > 1 day old
+# H4: 24 bars = 96h  H1: 48 bars = 48h  M30: 64 bars = 32h
+# Calendar cap: signals older than 48h wall-clock are dropped from the live dashboard.
+_TF_MAX_AGE = {"H4": 24, "H1": 48, "M30": 64}
+_SIGNAL_MAX_AGE_HOURS = 48   # show setups up to 2 days old (active filter removes dead ones)
 _ENTRY_TFS = ["H4", "H1", "M30"]              # scan all three
 
 
@@ -300,25 +300,36 @@ def _ltf_zones(pr: str, ltf: str) -> list:
 
 
 def _is_active(s: dict, df) -> bool:
-    """Check if a signal has already hit its stop loss or take profit."""
+    """Check if a signal has already hit its stop loss or take profit.
+    
+    Uses the last known close price as a live proxy. A signal is killed only
+    if price has CLEARLY broken through the stop or target — not just wicked it
+    on a stale bar (that would cause false negatives on fresh Railway data).
+    """
     import pandas as pd
     sig_time = pd.Timestamp(s["time"])
     after = df[df.index > sig_time]
     if after.empty:
-        return True
-    
+        return True  # No bars after signal yet — still pending entry
+
     stop = s["stop"]
     target = s["target"]
     long = s["direction"] == "long"
-    
+
+    # Check using CLOSE prices only (not high/low wicks) — more conservative,
+    # prevents stale bar wicks from killing genuinely active signals
     for _, row in after.iterrows():
-        hi, lo = row["high"], row["low"]
+        close = row["close"]
         if long:
-            if lo <= stop or hi >= target:
-                return False
+            if close <= stop:
+                return False  # Closed below stop — definitely dead
+            if close >= target:
+                return False  # Closed above target — profit taken
         else:
-            if hi >= stop or lo <= target:
-                return False
+            if close >= stop:
+                return False  # Closed above stop — definitely dead
+            if close <= target:
+                return False  # Closed below target — profit taken
     return True
 
 
@@ -644,9 +655,27 @@ def _scheduler() -> None:
     except Exception as e:  # noqa: BLE001
         print(f"[scheduler] initial tick error: {e}")
     while True:
-        time.sleep(max(60, TICK_INTERVAL))
+        # Use the shorter of TICK_INTERVAL or 600s (10 min) so live pairs
+        # (Binance/Deriv) update frequently. TwelveData forex will be fetched
+        # on a per-pair basis within engine.tick respecting the 8 req/min cap.
+        interval = min(max(60, TICK_INTERVAL), 600)
+        time.sleep(interval)
         try:
-            _run_and_cache(refresh=True)
+            import datetime as _dt
+            # Check if any data file is stale (> 30 min old) — if so, refresh
+            stale = False
+            try:
+                last_mtime = max(
+                    (f.stat().st_mtime for f in config.DATA_DIR.glob("*.parquet")),
+                    default=0
+                )
+                age_min = (_dt.datetime.now().timestamp() - last_mtime) / 60
+                stale = age_min > 30
+                if stale:
+                    print(f"[scheduler] data is {age_min:.0f}min old — refreshing")
+            except Exception:
+                pass
+            _run_and_cache(refresh=stale)
             print("[scheduler] autonomous tick done")
         except Exception as e:  # noqa: BLE001
             print(f"[scheduler] tick error: {e}")
