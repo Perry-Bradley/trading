@@ -282,9 +282,9 @@ def _reason(s: dict) -> dict:
 
 # Maximum signal age in bars per timeframe
 # H4: 12 bars = 48h (2 days)  H1: 24 bars = 24h  M30: 32 bars = 16h
-# Calendar cap: signals older than 48h wall-clock are always dropped.
+# Calendar cap: signals older than 24h wall-clock are dropped from the live dashboard.
 _TF_MAX_AGE = {"H4": 12, "H1": 24, "M30": 32}
-_SIGNAL_MAX_AGE_HOURS = 48   # never show a signal whose candle is > 2 days old
+_SIGNAL_MAX_AGE_HOURS = 24   # never show a signal whose candle is > 1 day old
 _ENTRY_TFS = ["H4", "H1", "M30"]              # scan all three
 
 

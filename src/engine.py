@@ -72,31 +72,33 @@ def tick(broker_kind: str = "paper", tf: str = "H4", bias_tf: str = "D1",
     # per pair); live brokers stay one-per-pair to avoid over-trading.
     opened = []
     scan_lookback = max(lookback, 120)      # back-fill ~recent weeks so accuracy builds fast
+    entry_tfs = ["H4", "H1", "M30"] if broker.name == "paper" else [tf]
     for pr in config.PAIRS:
-        try:
-            sigs = backtest.signals(pr, tf, bias_tf, target_r, lookback=scan_lookback)
-        except FileNotFoundError:
-            continue
-        for s in sigs:
-            p = policy.proba(vec(s["features"]))
-            size = policy.size(p)
-            s["conf"], s["size"] = p, size
-            gate = broker.name == "paper" or not broker.has_open(pr)
-            if p < min_conf or size <= 0 or not gate:
+        for t in entry_tfs:
+            try:
+                sigs = backtest.signals(pr, t, bias_tf, target_r, lookback=scan_lookback)
+            except FileNotFoundError:
                 continue
-            pos = broker.open_trade(s, size)
-            if not pos:
-                continue
-            opened.append(s)
-            journal.record({"ts": _dt.datetime.now().isoformat(timespec="seconds"),
-                            "event": "ENTRY", "pair": pr, "direction": s["direction"],
-                            "tf": tf, "entry": s["entry"], "stop": s["stop"],
-                            "target": s["target"], "conf": round(p, 3),
-                            "size": round(size, 2), "nav": broker.nav()})
-            if s.get("age_bars", 99) <= 1:   # only alert on genuinely fresh signals
-                notify(f"NEW {pr} {s['direction'].upper()} {tf}/{bias_tf}",
-                       f"entry {s['entry']:.5f} SL {s['stop']:.5f} TP {s['target']:.5f} "
-                       f"1:{target_r:.0f}  conf {p*100:.1f}%  size {size:.2f}x")
+            for s in sigs:
+                p = policy.proba(vec(s["features"]))
+                size = policy.size(p)
+                s["conf"], s["size"] = p, size
+                gate = broker.name == "paper" or not broker.has_open(pr)
+                if p < min_conf or size <= 0 or not gate:
+                    continue
+                pos = broker.open_trade(s, size)
+                if not pos:
+                    continue
+                opened.append(s)
+                journal.record({"ts": _dt.datetime.now().isoformat(timespec="seconds"),
+                                "event": "ENTRY", "pair": pr, "direction": s["direction"],
+                                "tf": t, "entry": s["entry"], "stop": s["stop"],
+                                "target": s["target"], "conf": round(p, 3),
+                                "size": round(size, 2), "nav": broker.nav()})
+                if s.get("age_bars", 99) <= 1:   # only alert on genuinely fresh signals
+                    notify(f"NEW {pr} {s['direction'].upper()} {t}/{bias_tf}",
+                           f"entry {s['entry']:.5f} SL {s['stop']:.5f} TP {s['target']:.5f} "
+                           f"1:{target_r:.0f}  conf {p*100:.1f}%  size {size:.2f}x")
 
     _process_closes(quiet=True)             # resolve the just-opened historical signals now
 
