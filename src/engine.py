@@ -33,7 +33,7 @@ def tick(broker_kind: str = "paper", tf: str = "H4", bias_tf: str = "D1",
     if refresh or not have_data:
         from src.data import fetch
         for pr in config.PAIRS:
-            for t in {tf, bias_tf}:
+            for t in {"H4", "H1", "M30", tf, bias_tf}:
                 try:
                     fetch.save(pr, t)
                 except Exception as e:  # noqa: BLE001
