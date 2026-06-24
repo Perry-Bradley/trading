@@ -18,27 +18,15 @@ MODELS_DIR.mkdir(parents=True, exist_ok=True)
 PAIRS = [
     "EURUSD", "GBPUSD", "AUDUSD", "NZDUSD", "USDJPY", "USDCAD",   # majors
     "EURJPY", "GBPJPY", "CHFJPY",                                 # liquid crosses
-    "XAUUSD",                                                     # gold (key SMC instrument)
+    "XAUUSD",                                                     # gold
     "BTCUSD",                                                     # crypto
+    "US30", "NAS100", "SPX500",                                   # indices
+    "V100", "V25",                                                # deriv volatility indices
 ]
 
 # Crypto behaves differently from forex: 24/7, real volume, no "pip" convention.
 CRYPTO = {"BTCUSD"}
-
-# Map our pair names to Yahoo Finance tickers.
-YF_TICKERS = {
-    "EURUSD": "EURUSD=X",
-    "GBPUSD": "GBPUSD=X",
-    "AUDUSD": "AUDUSD=X",
-    "NZDUSD": "NZDUSD=X",
-    "USDJPY": "USDJPY=X",
-    "USDCAD": "USDCAD=X",
-    "EURJPY": "EURJPY=X",
-    "GBPJPY": "GBPJPY=X",
-    "CHFJPY": "CHFJPY=X",
-    "XAUUSD": "GC=F",        # gold futures (yfinance); Twelve Data uses XAU/USD spot
-    "BTCUSD": "BTC-USD",
-}
+INDICES = {"US30", "NAS100", "SPX500", "V100", "V25"}
 
 # --- Timeframes (the MSNR ladder: D1 -> H4 -> H1 -> M30) ----------------------
 # value = (yfinance interval, yfinance max period we can request)
@@ -54,7 +42,7 @@ TIMEFRAMES = {
 #   JPY crosses -> 0.01
 #   other FX    -> 0.0001
 def pip_size(pair: str) -> float:
-    if pair in CRYPTO:
+    if pair in CRYPTO or pair in INDICES:
         return 1.0
     if pair == "XAUUSD":
         return 0.1            # gold: 1 pip = 0.1

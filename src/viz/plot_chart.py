@@ -140,7 +140,7 @@ def plot(pair: str, timeframe: str, bars: int, left: int, right: int) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Full annotated MSNR chart.")
-    p.add_argument("--pair", default="EURUSD", choices=list(config.YF_TICKERS))
+    p.add_argument("--pair", default="EURUSD", choices=list(config.PAIRS))
     p.add_argument("--timeframe", default="H4", choices=list(config.TIMEFRAMES))
     p.add_argument("--bars", type=int, default=160)
     p.add_argument("--left", type=int, default=3)

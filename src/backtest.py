@@ -341,7 +341,7 @@ def _fmt(m: dict) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Backtest the MSNR model.")
-    p.add_argument("--pair", choices=list(config.YF_TICKERS))
+    p.add_argument("--pair", choices=list(config.PAIRS))
     p.add_argument("--tf", default="H4", choices=list(config.TIMEFRAMES))
     p.add_argument("--bias-tf", default="D1", choices=list(config.TIMEFRAMES))
     p.add_argument("--target-r", type=float, default=3.0)

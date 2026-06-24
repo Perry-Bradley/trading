@@ -68,7 +68,10 @@ export default function Overview() {
               {sigs.slice(0, 6).map((s, i) => (
                 <li key={i} className="flex items-center justify-between p-2.5 rounded-lg border border-line">
                   <div className="flex items-center gap-2"><span className="font-semibold text-sm">{s.pair}</span><DirBadge dir={s.direction} /></div>
-                  <div className="text-xs text-sub">conf <span className={`font-semibold ${s.conf >= be ? "text-up" : ""}`}>{(s.conf * 100).toFixed(0)}%</span> · {s.size.toFixed(2)}x</div>
+                  <div className="flex flex-col items-end">
+                    <div className="text-xs text-sub">conf <span className={`font-semibold ${s.conf >= be ? "text-up" : ""}`}>{(s.conf * 100).toFixed(0)}%</span> · {s.size.toFixed(2)}x</div>
+                    {s.time && <div className="text-[10px] text-sub">{s.time}</div>}
+                  </div>
                 </li>
               ))}
             </ul>

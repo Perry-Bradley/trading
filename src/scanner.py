@@ -164,7 +164,7 @@ def scan_all(htf: str = "H4", ltf: str = "H1", min_score: float = 0.0) -> list[S
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Scan for live MSNR setups.")
-    p.add_argument("--pair", choices=list(config.YF_TICKERS))
+    p.add_argument("--pair", choices=list(config.PAIRS))
     p.add_argument("--htf", default="H4", choices=list(config.TIMEFRAMES))
     p.add_argument("--ltf", default="H1", choices=list(config.TIMEFRAMES))
     p.add_argument("--min-score", type=float, default=0.0)

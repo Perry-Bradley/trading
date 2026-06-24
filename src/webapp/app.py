@@ -220,6 +220,8 @@ def _scan_only() -> list:
             # only the most recent bars so the page shows fresh (hours-old) setups,
             # not multi-day-old ones. ~12 H4 bars ≈ the last ~2 days.
             for s in backtest.signals(pr, TF, BIAS_TF, TARGET_R, lookback=12):
+                if s.get("age_bars", 999) > 6:
+                    continue   # only show signals from the last ~24h (on H4)
                 p = pol.proba(vec(s["features"]))
                 s["conf"], s["size"] = p, pol.size(p)
                 s["time"] = str(s.get("time", ""))[:16]
@@ -328,7 +330,7 @@ def api_tick():
 
 
 # --- autonomous scheduler: tick on an interval so it trades & learns on its own ---
-TICK_INTERVAL = int(os.environ.get("TICK_INTERVAL", "3600"))   # seconds; 0 disables
+TICK_INTERVAL = int(os.environ.get("TICK_INTERVAL", "900"))   # seconds; default 15m
 _sched_started = [False]
 
 
