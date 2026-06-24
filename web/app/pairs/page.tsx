@@ -25,6 +25,7 @@ function ZoneList({ items, color }: { items: Zone[]; color?: string }) {
 export default function Pairs() {
   const [cfg, setCfg] = useState<Config | null>(null);
   const [sel, setSel] = useState<string>("");
+  const [selTf, setSelTf] = useState<string>("");
   const [a, setA] = useState<Analysis | null>(null);
   const [bt, setBt] = useState<BacktestRow | null>(null);
   const [btBusy, setBtBusy] = useState(false);
@@ -33,15 +34,18 @@ export default function Pairs() {
   useEffect(() => {
     api.config().then((c) => {
       setCfg(c);
-      const p = new URLSearchParams(window.location.search).get("p");
+      const sp = new URLSearchParams(window.location.search);
+      const p = sp.get("p");
+      const tf = sp.get("tf");
       setSel(p && c.pairs.includes(p) ? p : c.pairs[0]);
+      setSelTf(tf && ["H4", "H1", "M30"].includes(tf) ? tf : c.tf);
     }).catch(() => {});
   }, []);
 
   const load = useCallback(async () => {
-    if (!sel) return;
-    try { setA(await api.analysis(sel)); setBust(Date.now()); } catch { /* */ }
-  }, [sel]);
+    if (!sel || !selTf) return;
+    try { setA(await api.analysis(sel, selTf)); setBust(Date.now()); } catch { /* */ }
+  }, [sel, selTf]);
   useLive(load);
 
   const runBt = async () => {
@@ -64,6 +68,11 @@ export default function Pairs() {
         <>
           <div className="flex flex-wrap items-center gap-3">
             <span className="text-2xl font-bold">{a.pair}</span>
+            <div className="flex gap-1 ml-2 bg-line/20 p-1 rounded-lg">
+              {["H4", "H1", "M30"].map(t => (
+                <button key={t} onClick={() => { setSelTf(t); setA(null); }} className={`px-2 py-0.5 text-xs font-bold rounded ${selTf === t ? "bg-brand text-white" : "text-sub hover:text-ink"}`}>{t}</button>
+              ))}
+            </div>
             <DirBadge dir={a.bias} />
             <span className="text-sub text-sm">price <b className="font-mono text-ink">{fmtPrice(a.price)}</b> · {a.tf}/{a.bias_tf} bias</span>
             <button onClick={runBt} disabled={btBusy}

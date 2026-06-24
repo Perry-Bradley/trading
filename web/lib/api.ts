@@ -19,7 +19,7 @@ export const api = {
   journal: (n = 60) => j<{ rows: JournalRow[] }>(`/api/journal?n=${n}`),
   model: () => j<ModelInfo>("/api/model"),
   data: () => j<DataInfo>("/api/data"),
-  analysis: (pair: string) => j<Analysis>(`/api/analysis?pair=${pair}`),
+  analysis: (pair: string, tf?: string) => j<Analysis>(`/api/analysis?pair=${pair}${tf ? `&tf=${tf}` : ""}`),
   chartUrl: (pair: string, tf: string, bust = 0) => `${BASE}/api/chart?pair=${pair}&tf=${tf}&t=${bust}`,
   backtest: (pair?: string) =>
     j<{ results: BacktestRow[]; seed_state?: string }>(`/api/backtest${pair ? `?pair=${pair}` : ""}`),

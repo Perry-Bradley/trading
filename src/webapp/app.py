@@ -504,7 +504,7 @@ def health():
 @app.route("/api/config")
 def api_config():
     from src.notify import telegram_configured
-    return jsonify({"pairs": config.PAIRS, "tf": TF, "bias_tf": BIAS_TF,
+    return jsonify({"pairs": config.PAIRS, "tf": tf, "bias_tf": BIAS_TF,
                     "target_r": TARGET_R, "breakeven": 1 / (1 + TARGET_R),
                     "broker": BROKER, "telegram": telegram_configured(),
                     "seed_state": SEED["state"]})
@@ -700,7 +700,7 @@ def api_backtest():
             results.append(row)
         except Exception as e:  # noqa: BLE001
             results.append({"pair": pr, "error": str(e)})
-    return jsonify({"results": results, "tf": TF, "bias_tf": BIAS_TF, "target_r": TARGET_R})
+    return jsonify({"results": results, "tf": tf, "bias_tf": BIAS_TF, "target_r": TARGET_R})
 
 
 _ANALYSIS_CACHE = {}
@@ -711,16 +711,17 @@ def api_analysis():
     """SMC analysis for a pair: bias, structure breaks (BOS/CHoCH), fresh SNR,
     order blocks, fair value gaps, and liquidity sweeps (BSL/SSL) — with levels."""
     pair = request.args.get("pair", config.PAIRS[0])
+    tf = request.args.get("tf", TF)
     if not _seeded():
         return jsonify({"seed_state": SEED["state"]})
-    c = _ANALYSIS_CACHE.get(pair)
+    c = _ANALYSIS_CACHE.get(f"{pair}_{tf}")
     if c and time.time() - c[0] < 60:
         return jsonify(c[1])
     from src.data.fetch import load
     from src.detectors import smc
     from src.detectors import snr as snrmod
     from src.detectors import structure as stmod
-    df = load(pair, TF)
+    df = load(pair, tf)
     last = len(df) - 1
     res = stmod.analyze(df)
     breaks = [{"type": b.kind, "dir": b.direction, "level": round(b.level, 5),
@@ -739,10 +740,10 @@ def api_analysis():
                  "time": str(b.time)[:16]} for b in smc.breaker_blocks(df)[-6:]][::-1]
     qms = [{"kind": q.kind, "sweep": round(q.sweep_level, 5), "choch": round(q.choch_level, 5),
             "time": str(q.time)[:16]} for q in smc.quasimodos(df)[-6:]][::-1]
-    out = {"pair": pair, "tf": TF, "bias_tf": BIAS_TF, "price": round(float(df["close"].iat[-1]), 5),
+    out = {"pair": pair, "tf": tf, "bias_tf": BIAS_TF, "price": round(float(df["close"].iat[-1]), 5),
            "bias": bias, "breaks": breaks, "fresh_snr": fresh, "order_blocks": obs,
            "fvgs": fvgs, "sweeps": sweeps, "breakers": breakers, "quasimodos": qms}
-    _ANALYSIS_CACHE[pair] = (time.time(), out)
+    _ANALYSIS_CACHE[f"{pair}_{tf}"] = (time.time(), out)
     return jsonify(out)
 
 
