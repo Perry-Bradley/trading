@@ -215,11 +215,53 @@ def _features(ctx, df, i, bias, zone, atr_i, rej_strength, K=10) -> dict:
     }
 
 
+def _get_fta(i, b, entry, df, zones, ctx) -> float:
+    """Find First Trouble Area (target) for the setup."""
+    candidates = []
+    # 1. Opposing SNR zones that are valid
+    want_opposing = "resistance" if b > 0 else "support"
+    for z in zones:
+        if z.kind == want_opposing and z.is_valid_at(i) and z.anchor_idx <= i:
+            if (b > 0 and z.bottom > entry):
+                candidates.append(z.bottom)
+            elif (b < 0 and z.top < entry):
+                candidates.append(z.top)
+                
+    # 2. Opposing OBs
+    if ctx and "obs" in ctx:
+        want_ob = "bearish" if b > 0 else "bullish"
+        for ob in ctx["obs"]:
+            if ob.kind == want_ob and ob.idx <= i:
+                if (b > 0 and ob.bottom > entry):
+                    candidates.append(ob.bottom)
+                elif (b < 0 and ob.top < entry):
+                    candidates.append(ob.top)
+                    
+    # 3. Recent swing highs/lows
+    lookback = max(0, i - 50)
+    if b > 0:
+        recent_high = float(df["high"].iloc[lookback:i+1].max())
+        if recent_high > entry:
+            candidates.append(recent_high)
+    else:
+        recent_low = float(df["low"].iloc[lookback:i+1].min())
+        if recent_low < entry:
+            candidates.append(recent_low)
+            
+    if not candidates:
+        return 0.0 # Fallback
+        
+    if b > 0:
+        return min(candidates)  # Nearest trouble area above
+    else:
+        return max(candidates)  # Nearest trouble area below
+
+
 def run(
     pair: str,
     tf: str = "H4",
     bias_tf: str | None = "D1",
-    target_r: float = 3.0,
+    target_r: float = 2.0, # Now acts as min_rr
     sl_buffer_atr: float = 0.25,
     max_hold: int = 60,
     cost_pips: float | None = None,
@@ -239,7 +281,9 @@ def run(
     bull_rej = rej["bull_rej"].to_numpy()
     bear_rej = rej["bear_rej"].to_numpy()
     rej_strength = rej["strength"].to_numpy()
-    ctx = _build_feature_context(df, atr_arr, left, right) if collect_features else None
+    
+    # We must collect features for FTA (OBs, etc.)
+    ctx = _build_feature_context(df, atr_arr, left, right)
 
     if bias_tf:
         bias = _htf_bias_array(df, load(pair, bias_tf))
@@ -287,7 +331,18 @@ def run(
         if risk <= 0:
             i += 1
             continue
-        target = entry + target_r * risk if b > 0 else entry - target_r * risk
+            
+        fta = _get_fta(i, b, entry, df, zones, ctx)
+        if fta == 0.0:
+            i += 1
+            continue
+            
+        target = fta
+        dynamic_rr = ((target - entry) if b > 0 else (entry - target)) / risk
+        if dynamic_rr < target_r: # Use target_r as the minimum R:R threshold (e.g. 2.0)
+            i += 1
+            continue
+
         cost_r = cost_price / risk
 
         # simulate forward
@@ -354,13 +409,21 @@ def signals(pair: str, tf: str = "H4", bias_tf: str = "D1", target_r: float = 2.
         if b > 0:
             stop = zone.bottom - sl_buffer_atr * a
             risk = entry - stop
-            target = entry + target_r * risk
         else:
             stop = zone.top + sl_buffer_atr * a
             risk = stop - entry
-            target = entry - target_r * risk
         if risk <= 0:
             continue
+            
+        fta = _get_fta(i, b, entry, df, zones, ctx)
+        if fta == 0.0:
+            continue
+            
+        target = fta
+        dynamic_rr = ((target - entry) if b > 0 else (entry - target)) / risk
+        if dynamic_rr < target_r: # Minimum R:R
+            continue
+            
         feats = _features(ctx, df, i, b, zone, a, rej_strength[i])
         feats["direction"] = 1 if b > 0 else 0           # match dataset feature set
         feats["tf_minutes"] = {"M30": 30, "H1": 60, "H4": 240, "D1": 1440}[tf]
@@ -368,7 +431,7 @@ def signals(pair: str, tf: str = "H4", bias_tf: str = "D1", target_r: float = 2.
             "pair": pair, "tf": tf, "bias_tf": bias_tf,
             "time": df.index[i], "age_bars": (n - 1) - i,   # 0 = current bar
             "direction": "long" if b > 0 else "short",
-            "entry": entry, "stop": stop, "target": target, "rr": target_r,
+            "entry": entry, "stop": stop, "target": target, "rr": round(dynamic_rr, 2),
             "features": feats,
         })
     return out

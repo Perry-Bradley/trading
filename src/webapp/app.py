@@ -22,6 +22,7 @@ from flask import Flask, jsonify, redirect, render_template_string, request, sen
 
 import config
 from src import engine
+from src.webapp.news import get_high_impact_news, is_news_embargo
 
 app = Flask(__name__)
 LAST_TICK = config.DATA_DIR / "last_tick.json"
@@ -119,7 +120,7 @@ PAGE = """
 <table><tr><th>pair</th><th>dir</th><th>entry</th><th>SL</th><th>TP</th><th>R:R</th><th>conf</th><th>size</th></tr>
 {% for s in signals %}<tr><td>{{s.pair}}</td><td class="{{s.direction}}">{{s.direction|upper}}</td>
 <td>{{'%.5f'|format(s.entry)}}</td><td>{{'%.5f'|format(s.stop)}}</td><td>{{'%.5f'|format(s.target)}}</td>
-<td>1:{{tr}}</td><td>{{'%.1f'|format(s.conf*100)}}%</td><td>{{'%.2f'|format(s.size)}}x</td></tr>
+<td>1:{{'%.2f'|format(s.rr)}}</td><td>{{'%.1f'|format(s.conf*100)}}%</td><td>{{'%.2f'|format(s.size)}}x</td></tr>
 {% else %}<tr><td colspan="8">no fresh signals on last tick</td></tr>{% endfor %}</table>
 
 <h3>Open positions</h3>
@@ -134,8 +135,42 @@ PAGE = """
 <td>{{c.outcome}}</td><td>{{'%.2f'|format(c.r or 0)}}</td><td>{{'%+.2f'|format(c.pnl)}}</td></tr>
 {% else %}<tr><td colspan="5">none yet</td></tr>{% endfor %}</table>
 
+<div style="margin-top:16px"><a href="/journal" style="color:#3b82f6;text-decoration:none;">&rarr; View Full Trading Journal</a></div>
+
 <div class="warn">Decision-support only — not financial advice. Paper-trade before risking real capital.
 Last tick: {{when}}</div>
+</body></html>
+"""
+
+JOURNAL_PAGE = """
+<!doctype html><html><head><meta charset="utf-8"><title>MSNR Journal</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+ body{font-family:system-ui,Segoe UI,Arial;background:#0e1116;color:#e6edf3;margin:0;padding:24px}
+ h1{font-size:20px;margin:0 0 4px}
+ a{color:#3b82f6;text-decoration:none;margin-bottom:20px;display:inline-block}
+ table{width:100%;border-collapse:collapse;margin:10px 0 26px;font-size:13px}
+ th,td{text-align:left;padding:7px 10px;border-bottom:1px solid #21262d}
+ th{color:#8b949e;font-weight:600} .long{color:#3fb950}.short{color:#f85149}
+ .win{color:#3fb950} .loss{color:#f85149} .timeout{color:#d29922}
+</style></head><body>
+<a href="/">&larr; Back to Dashboard</a>
+<h1>Trading Journal</h1>
+<p>Track record: {{ record.wins }}W - {{ record.losses }}L ({{ '%.1f'|format(record.win_rate*100) }}%) | Net: {{ '%+.2f'|format(record.total_r) }}R</p>
+<table>
+<tr><th>Time</th><th>Pair</th><th>Dir</th><th>Outcome</th><th>R</th><th>P&L</th><th>Details</th></tr>
+{% for t in trades %}
+<tr>
+  <td>{{ t.exit_time[:16] }}</td>
+  <td>{{ t.pair }}</td>
+  <td class="{{ t.direction }}">{{ t.direction|upper }}</td>
+  <td class="{{ t.outcome }}">{{ t.outcome|upper }}</td>
+  <td>{{ '%.2f'|format(t.r or 0) }}</td>
+  <td>{{ '%+.2f'|format(t.pnl) }}</td>
+  <td><span style="color:#8b949e;font-size:11px">{{ t.why }}</span></td>
+</tr>
+{% else %}<tr><td colspan="7">No trades recorded yet.</td></tr>{% endfor %}
+</table>
 </body></html>
 """
 
@@ -170,6 +205,22 @@ service and set <code>NEXT_PUBLIC_API_URL</code> to this URL.</p>
     return render_template_string(html, base=request.host_url.rstrip("/"),
                                   tf=TF, bias_tf=BIAS_TF, tr=int(TARGET_R), broker=BROKER)
 
+@app.route("/journal")
+def journal_page():
+    from src import journal
+    trades = journal.recent(100)
+    record = journal.track_record()
+    # Add 'why' to trades for display if missing
+    for t in trades:
+        if "why" not in t:
+            fp = get_fingerprint(t.get("features", {}))
+            fp_name = "Standard MSNR"
+            if fp == "QML": fp_name = "Quasimodo (QML)"
+            elif fp == "TurtleSoup": fp_name = "Turtle Soup / SH+BMS+RTO"
+            elif fp == "Flipped": fp_name = "SBR/RBS Flip"
+            elif fp == "OB_FVG": fp_name = "Order Block / FVG"
+            t["why"] = f"[{fp_name}] {t.get('direction', '').title()} setup"
+    return render_template_string(JOURNAL_PAGE, trades=trades, record=record)
 
 @app.route("/tick", methods=["POST", "GET"])
 def do_tick():
@@ -213,7 +264,14 @@ def _reason(s: dict) -> dict:
         conf.append(f"strong rejection wick ({f.get('rej_wick_ratio', 0):.0%} of range)")
     if s.get("tf_aligned"):
         conf.append(f"multi-TF aligned ({s.get('aligned_tf', '')})")
-    why = (f"{bias.title()} {s['tf']} bias into a fresh {kind} SNR level, confirmed by a "
+        
+    fp_name = "Standard MSNR"
+    if f.get("qml_at_zone"): fp_name = "Quasimodo (QML)"
+    elif f.get("sweep_recent") and f.get("choch_recent"): fp_name = "Turtle Soup / SH+BMS+RTO"
+    elif f.get("flipped_level"): fp_name = "SBR/RBS Flip"
+    elif f.get("ob_conf") or f.get("fvg_conf"): fp_name = "Order Block / FVG"
+
+    why = (f"[{fp_name}] {bias.title()} {s['tf']} bias into a fresh {kind} SNR level, confirmed by a "
            f"rejection candle" + (". Confluences: " + ", ".join(conf) if conf else "."))
     return {"why": why, "confluences": conf, "tf": s.get("tf", TF)}
 
@@ -244,17 +302,14 @@ def _scan_only() -> list:
     Never raises — returns [] until data + model are seeded."""
     if not _seeded():
         return []
-    try:
-        from src import backtest
-        from src.ml.online import OnlinePolicy, vec
-        pol = OnlinePolicy.load_or_bootstrap(TARGET_R)
-    except Exception:  # noqa: BLE001
-        return []
 
     # Build LTF zone caches for multi-TF alignment (loaded once per pair)
     ltf_cache: dict[tuple, list] = {}
+    
+    _ensure_fingerprints()
+    news_data = _get_news()
 
-    out = []
+    raw_signals = []
     for pr in config.PAIRS:
         for entry_tf in _ENTRY_TFS:
             try:
@@ -293,24 +348,94 @@ def _scan_only() -> list:
 
                     s["tf_aligned"] = tf_aligned
                     s["aligned_tf"] = aligned_tf
+                    
+                    if hasattr(s["time"], "tzinfo") and s["time"].tzinfo is None:
+                        # Assuming local timezone logic in backtest
+                        pass
+                        
+                    embargo, news_title = is_news_embargo(pr, s["time"], news_data)
+                    if embargo:
+                        continue # Drop signal due to impending high-impact news
 
-                    p = pol.proba(vec(s["features"]))
+                    fp = get_fingerprint(s["features"])
+                    base_conf = _FINGERPRINT_STATS.get(fp, 0.5)
+
                     # Confidence boost for multi-TF alignment (course: highest quality)
                     if tf_aligned:
-                        p = min(0.99, p * 1.15)
-                    s["conf"], s["size"] = p, pol.size(p)
+                        base_conf = min(0.99, base_conf * 1.15)
+                        
+                    s["conf"] = base_conf
+                    s["size"] = 1.0 if base_conf >= 0.5 else 0.5
+                    
                     s["time"] = str(s.get("time", ""))[:16]
                     s.update(_reason(s))
-                    out.append({k: s[k] for k in (
-                        "pair", "direction", "entry", "stop", "target",
+                    raw_signals.append({k: s[k] for k in (
+                        "pair", "direction", "entry", "stop", "target", "rr",
                         "conf", "size", "features", "why", "confluences",
                         "tf", "time", "age_bars", "tf_aligned", "aligned_tf"
                     )})
             except Exception:  # noqa: BLE001
                 continue
+                
     # Sort: multi-TF aligned first, then by confidence
-    out.sort(key=lambda s: (-int(s.get("tf_aligned", False)), -s.get("conf", 0)))
+    raw_signals.sort(key=lambda s: (-int(s.get("tf_aligned", False)), -s.get("conf", 0)))
+    
+    out = []
+    seen_groups = set()
+    for s in raw_signals:
+        grp_froz = frozenset(_get_group(s["pair"]))
+        if grp_froz in seen_groups:
+            continue # Skip due to correlation
+        seen_groups.add(grp_froz)
+        out.append(s)
+        
     return out
+
+_NEWS_CACHE = {"t": 0.0, "data": []}
+def _get_news():
+    if time.time() - _NEWS_CACHE["t"] > 3600:
+        _NEWS_CACHE["data"] = get_high_impact_news()
+        _NEWS_CACHE["t"] = time.time()
+    return _NEWS_CACHE["data"]
+
+def get_fingerprint(feats: dict) -> str:
+    parts = []
+    if feats.get("qml_at_zone"): parts.append("QML")
+    if feats.get("sweep_recent") and feats.get("choch_recent"): parts.append("TurtleSoup")
+    elif feats.get("sweep_recent"): parts.append("Sweep")
+    if feats.get("flipped_level"): parts.append("Flipped")
+    if feats.get("ob_conf") or feats.get("fvg_conf"): parts.append("OB_FVG")
+    if feats.get("session_score"): parts.append("Killzone")
+    if not parts: parts.append("Base")
+    return "|".join(parts)
+
+_FINGERPRINT_STATS = {}
+def _ensure_fingerprints():
+    global _FINGERPRINT_STATS
+    if _FINGERPRINT_STATS: return
+    try:
+        from src.ml.dataset import build
+        df = build(target_r=TARGET_R)
+        stats = {}
+        for idx, row in df.iterrows():
+            fp = get_fingerprint(row.to_dict())
+            if fp not in stats: stats[fp] = {"w":0, "n":0}
+            stats[fp]["n"] += 1
+            if row["win"] == 1: stats[fp]["w"] += 1
+        _FINGERPRINT_STATS = {k: v["w"]/v["n"] for k,v in stats.items()}
+    except Exception as e:
+        print("Fingerprint err:", e)
+
+CORR_GROUPS = [
+    {"EURUSD", "GBPUSD", "AUDUSD", "NZDUSD"},
+    {"USDCHF", "USDCAD", "USDJPY"},
+    {"EURJPY", "GBPJPY", "CHFJPY"}
+]
+
+def _get_group(pair):
+    for g in CORR_GROUPS:
+        if pair in g: return g
+    return {pair}
 
 
 _OVERVIEW_CACHE = {"t": 0.0, "data": []}

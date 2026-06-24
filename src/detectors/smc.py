@@ -46,11 +46,16 @@ class Quasimodo:
     choch_level: float   # the structure level the move then broke (commitment)
 
 
-def order_blocks(df: pd.DataFrame, left: int = 3, right: int = 3, lookback: int = 10) -> list[Zone]:
-    """Order blocks anchored to structure breaks."""
+def order_blocks(df: pd.DataFrame, left: int = 3, right: int = 3, lookback: int = 10, enforce_ote: bool = True) -> list[Zone]:
+    """Order blocks anchored to structure breaks.
+    If enforce_ote is True, the block must overlap with the Fib 0.62-0.79 OTE zone of the breaking impulse.
+    """
     res = analyze(df, left, right)
+    swings = res["swings"]
     o = df["open"].to_numpy()
     c = df["close"].to_numpy()
+    h = df["high"].to_numpy()
+    l = df["low"].to_numpy()
     obs: list[Zone] = []
     for br in res["breaks"]:
         want_bullish_ob = br.direction == "up"     # up move -> last bearish candle
@@ -66,8 +71,34 @@ def order_blocks(df: pd.DataFrame, left: int = 3, right: int = 3, lookback: int 
                 break
         if ob_idx is None:
             continue
+            
         top = float(df["high"].iat[ob_idx])
         bottom = float(df["low"].iat[ob_idx])
+        
+        if enforce_ote:
+            # Find the origin of the impulse (last swing low for bullish break, last swing high for bearish)
+            origin_swing = None
+            for s in reversed(swings):
+                if s.idx < br.idx and s.kind == ("L" if want_bullish_ob else "H"):
+                    origin_swing = s
+                    break
+            
+            if origin_swing is not None:
+                impulse_start = origin_swing.price
+                impulse_end = float(h[br.idx]) if want_bullish_ob else float(l[br.idx])
+                range_len = impulse_end - impulse_start
+                
+                if want_bullish_ob:
+                    ote_top = impulse_end - 0.62 * range_len
+                    ote_bot = impulse_end - 0.79 * range_len
+                    if top < ote_bot or bottom > ote_top:
+                        continue # Not in OTE
+                else:
+                    ote_bot = impulse_end - 0.62 * range_len
+                    ote_top = impulse_end - 0.79 * range_len
+                    if bottom > ote_top or top < ote_bot:
+                        continue # Not in OTE
+
         kind = "bullish" if want_bullish_ob else "bearish"
         obs.append(Zone(kind, top, bottom, ob_idx, df.index[ob_idx], ref_idx=br.idx))
 
@@ -170,6 +201,64 @@ def quasimodos(df: pd.DataFrame, left: int = 3, right: int = 3, window: int = 6)
             continue
         out.append(Quasimodo("bearish" if ch.direction == "down" else "bullish",
                              ch.idx, ch.time, sw.level, ch.level))
+    return out
+
+
+@dataclass
+class AMD:
+    direction: str       # "bullish" or "bearish" distribution
+    idx: int
+    time: pd.Timestamp
+    accumulation_high: float
+    accumulation_low: float
+    manipulation_extreme: float
+
+def amd_cycles(df: pd.DataFrame, session_start_hour: int = 0, session_len: int = 8) -> list[AMD]:
+    """AMD (Accumulation, Manipulation, Distribution) / Judas Swing detection.
+    Typically Accumulation is Asian session (e.g., 00:00 to 08:00 UTC).
+    Manipulation (Judas Swing) sweeps accumulation highs/lows at London/NY open.
+    Distribution is the true trend.
+    """
+    out: list[AMD] = []
+    times = pd.Series(df.index)
+    
+    # We define accumulation as period from session_start_hour for session_len hours
+    in_acc = (times.dt.hour >= session_start_hour) & (times.dt.hour < session_start_hour + session_len)
+    
+    # Group by date to find daily cycles
+    dates = times.dt.date.unique()
+    for d in dates:
+        day_df = df[times.dt.date == d]
+        day_times = times[times.dt.date == d]
+        acc_mask = (day_times.dt.hour >= session_start_hour) & (day_times.dt.hour < session_start_hour + session_len)
+        if acc_mask.sum() == 0:
+            continue
+            
+        acc_df = day_df[acc_mask.values]
+        acc_high = acc_df['high'].max()
+        acc_low = acc_df['low'].min()
+        
+        post_acc_mask = (day_times.dt.hour >= session_start_hour + session_len)
+        if post_acc_mask.sum() == 0:
+            continue
+            
+        post_acc_df = day_df[post_acc_mask.values]
+        post_high = post_acc_df['high'].max()
+        post_low = post_acc_df['low'].min()
+        
+        # Did we manipulate above acc_high then distribute below acc_low? (Bearish AMD)
+        if post_high > acc_high and post_acc_df['close'].min() < acc_low:
+            # Find the index of the breakdown
+            break_idx = post_acc_df[post_acc_df['close'] < acc_low].index[0]
+            global_idx = df.index.get_loc(break_idx)
+            out.append(AMD("bearish", global_idx, break_idx, acc_high, acc_low, post_high))
+            
+        # Did we manipulate below acc_low then distribute above acc_high? (Bullish AMD)
+        elif post_low < acc_low and post_acc_df['close'].max() > acc_high:
+            break_idx = post_acc_df[post_acc_df['close'] > acc_high].index[0]
+            global_idx = df.index.get_loc(break_idx)
+            out.append(AMD("bullish", global_idx, break_idx, acc_high, acc_low, post_low))
+            
     return out
 
 
