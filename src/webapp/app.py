@@ -47,7 +47,11 @@ def _model_path():
 
 
 def _seeded() -> bool:
-    return SEED["state"] == "ready" or _model_path().exists()
+    if SEED["state"] == "ready": return True
+    if not _model_path().exists(): return False
+    # Model exists, but do we have the multi-TF data files?
+    pr = config.PAIRS[0]
+    return (config.DATA_DIR / f"{pr}_H1.parquet").exists() and (config.DATA_DIR / f"{pr}_M30.parquet").exists()
 
 
 def _seed() -> None:
