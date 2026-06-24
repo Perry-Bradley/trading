@@ -299,6 +299,29 @@ def _ltf_zones(pr: str, ltf: str) -> list:
         return []
 
 
+def _is_active(s: dict, df) -> bool:
+    """Check if a signal has already hit its stop loss or take profit."""
+    import pandas as pd
+    sig_time = pd.Timestamp(s["time"])
+    after = df[df.index > sig_time]
+    if after.empty:
+        return True
+    
+    stop = s["stop"]
+    target = s["target"]
+    long = s["direction"] == "long"
+    
+    for _, row in after.iterrows():
+        hi, lo = row["high"], row["low"]
+        if long:
+            if lo <= stop or hi >= target:
+                return False
+        else:
+            if hi >= stop or lo <= target:
+                return False
+    return True
+
+
 def _scan_only() -> list:
     """Current signals across ALL entry timeframes (H4, H1, M30) and all pairs.
 
@@ -342,6 +365,15 @@ def _scan_only() -> list:
                                 continue  # data is too stale — skip
                         except Exception:
                             pass
+                    
+                    # Ensure the signal is still active (hasn't hit SL or TP)
+                    from src.data.fetch import load
+                    try:
+                        df = load(pr, entry_tf)
+                        if not _is_active(s, df):
+                            continue
+                    except Exception:
+                        pass
 
                     # --- Multi-TF alignment check (MSNR course rule) ---
                     ltf_map = {"H4": "H1", "H1": "M30"}   # H4 aligns with H1; H1 aligns with M30
