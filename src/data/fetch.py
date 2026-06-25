@@ -74,9 +74,10 @@ def fetch(pair: str, timeframe: str) -> pd.DataFrame:
 
 
 def save(pair: str, timeframe: str) -> pd.DataFrame:
+    from src.data import io
     df = fetch(pair, timeframe)
     out = config.DATA_DIR / f"{pair}_{timeframe}.parquet"
-    df.to_parquet(out)
+    io.atomic_to_parquet(df, out)
     span = f"{df.index.min()} -> {df.index.max()}"
     print(f"  saved {pair} {timeframe:>3}: {len(df):>6} bars  ({span})  -> {out.name}")
     return df

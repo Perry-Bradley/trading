@@ -64,6 +64,7 @@ def _on_trade(symbol: str, price: float, ts_ms: int) -> None:
 
 
 def _merge_bar(pair: str, tf: str, bar: dict) -> None:
+    from src.data import io
     path = config.DATA_DIR / f"{pair}_{tf}.parquet"
     ts = bar["start"]
     row = {
@@ -71,31 +72,35 @@ def _merge_bar(pair: str, tf: str, bar: dict) -> None:
         "low": float(bar["low"]), "close": float(bar["close"]),
         "volume": float(bar.get("volume", 0)),
     }
-    if path.exists():
-        df = pd.read_parquet(path)
+
+    def _update(df):
+        if df is None or len(df) == 0:
+            return pd.DataFrame([row], index=pd.DatetimeIndex([ts], name="time"))
         if ts in df.index:
             df.loc[ts, "high"] = max(float(df.loc[ts, "high"]), row["high"])
             df.loc[ts, "low"] = min(float(df.loc[ts, "low"]), row["low"])
             df.loc[ts, "close"] = row["close"]
-        elif len(df) == 0 or df.index[-1] < ts:
+        elif df.index[-1] < ts:
             df.loc[ts] = row
             df = df.sort_index()
-        # trim to last 5000 bars
+        else:
+            return None  # stale tick older than history — ignore
         if len(df) > 5000:
             df = df.iloc[-5000:]
-    else:
-        df = pd.DataFrame([row], index=pd.DatetimeIndex([ts], name="time"))
-    df.to_parquet(path)
+        return df
+
+    # Atomic, lock-serialized read-modify-write (won't collide with REST writes).
+    io.atomic_update(path, _update)
 
 
 def _rebuild_h4(pair: str) -> None:
-    h1_path = config.DATA_DIR / f"{pair}_H1.parquet"
-    if not h1_path.exists():
+    from src.data import io
+    h1 = io.safe_read_parquet(config.DATA_DIR / f"{pair}_H1.parquet")
+    if h1 is None or h1.empty:
         return
-    h1 = pd.read_parquet(h1_path)
     h4 = finnhub._to_h4(h1)
     if not h4.empty:
-        h4.to_parquet(config.DATA_DIR / f"{pair}_H4.parquet")
+        io.atomic_to_parquet(h4, config.DATA_DIR / f"{pair}_H4.parquet")
 
 
 def flush_to_disk() -> None:
@@ -141,6 +146,7 @@ def _ws_loop() -> None:
         return
     symbols = [finnhub.symbol_for(p) for p in config.PAIRS if p in finnhub.PAIR_SYMBOL]
     url = f"{WS_URL}?token={key}"
+    backoff = 5  # seconds, grows on repeated failures (Finnhub free tier = 1 connection/key)
     while _status["running"]:
         try:
             with connect(url, open_timeout=20) as ws:
@@ -148,6 +154,7 @@ def _ws_loop() -> None:
                     ws.send(json.dumps({"type": "subscribe", "symbol": sym}))
                 _status["connected"] = True
                 _status["last_error"] = None
+                backoff = 5  # reset after a clean connect
                 print(f"[finnhub-ws] connected — {len(symbols)} forex symbols")
                 while _status["running"]:
                     raw = ws.recv()
@@ -160,8 +167,14 @@ def _ws_loop() -> None:
         except Exception as e:  # noqa: BLE001
             _status["connected"] = False
             _status["last_error"] = str(e)[:120]
-            print(f"[finnhub-ws] disconnected ({e}) — retry in 5s")
-            time.sleep(5)
+            # 429 = another connection holds the key (e.g. old container during a
+            # redeploy). Back off harder so we don't fight it; otherwise grow gently.
+            is_429 = "429" in str(e)
+            wait = 60 if is_429 else backoff
+            print(f"[finnhub-ws] disconnected ({str(e)[:80]}) — retry in {wait}s")
+            time.sleep(wait)
+            if not is_429:
+                backoff = min(backoff * 2, 60)
 
 
 def start_background() -> None:
