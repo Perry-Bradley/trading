@@ -3,7 +3,10 @@
 Routing:
   BTCUSD     -> Binance (real-time, no key)
   V100, V25  -> Deriv WebSocket
-  Forex/XAU  -> Finnhub REST + WebSocket (requires FINNHUB_KEY)
+  Forex/XAU  -> TwelveData REST for HISTORY (multi-key pool, TWELVEDATA_KEY[S])
+                + Finnhub WebSocket for LIVE ticks (FINNHUB_KEY, finnhub_ws.py).
+                Finnhub free tier blocks REST candles (403), so history is
+                TwelveData; live forming bars are the WebSocket's job.
 
 Data is saved as parquet under data/<PAIR>_<TIMEFRAME>.parquet.
 """
@@ -47,7 +50,7 @@ def source_for(pair: str) -> str:
         return "binance"
     if pair in ("V100", "V25"):
         return "deriv"
-    return "finnhub"
+    return "twelvedata"
 
 
 def fetch(pair: str, timeframe: str) -> pd.DataFrame:
@@ -64,8 +67,10 @@ def fetch(pair: str, timeframe: str) -> pd.DataFrame:
         from src.data.sources import deriv_data
         return _sanitize(deriv_data.fetch_ohlcv(pair, timeframe))
 
-    from src.data.sources import finnhub
-    return _sanitize(finnhub.fetch_ohlcv(pair, timeframe))
+    # Forex / gold history: TwelveData REST (Finnhub free tier blocks REST
+    # candles). Live ticks for these pairs arrive via Finnhub WebSocket.
+    from src.data.sources import twelvedata
+    return _sanitize(twelvedata.fetch_ohlcv(pair, timeframe))
 
 
 def save(pair: str, timeframe: str) -> pd.DataFrame:

@@ -744,14 +744,19 @@ def _fast_updater() -> None:
 
 
 def _slow_updater() -> None:
-    """Thread: Finnhub REST refresh for forex — WebSocket handles live forming bars."""
+    """Thread: TwelveData REST history for forex — Finnhub WebSocket handles live bars.
+
+    save_if_stale only fetches when a parquet is older than its bar period, so the
+    WebSocket keeping M30/H1 fresh means TwelveData is mostly hit for H4/D1 backfill
+    — conserving the free-tier credits across the rotating key pool.
+    """
     # Wait for initial seed
     for _ in range(180):
         if _seeded():
             break
         time.sleep(5)
     _, slow = _get_live_groups()
-    print(f"[slow-updater] forex pairs: {slow} — REST refresh + Finnhub WebSocket live")
+    print(f"[slow-updater] forex pairs: {slow} — TwelveData history + Finnhub WebSocket live")
     idx = 0
     tf_cycle = ["M30", "H1", "H4", BIAS_TF]
     while True:
@@ -797,7 +802,7 @@ def _start_scheduler() -> None:
         threading.Thread(target=_scheduler, daemon=True, name="scheduler-init").start()
         # 2. Fast loop: Binance + Deriv updated every 60 s (no rate limit)
         threading.Thread(target=_fast_updater, daemon=True, name="updater-fast").start()
-        # 3. Slow loop: TwelveData forex, one pair per ~32 s (8 req/min)
+        # 3. Slow loop: Finnhub REST for forex history (WS handles live ticks)
         threading.Thread(target=_slow_updater, daemon=True, name="updater-slow").start()
         print("[scheduler] tiered real-time updater started: fast=60s, slow=8req/min forex cycle")
 
@@ -827,17 +832,22 @@ def api_data():
             else:
                 tfs[tf] = None
         src = _fetch.source_for(pr)
-        live = src in ("binance", "finnhub", "deriv")
+        live = src in ("binance", "twelvedata", "deriv")
         rows.append({"pair": pr, "tf": tfs, "source": src, "live": live})
     out = {"pairs": rows, "timeframes": list(config.TIMEFRAMES),
            "ladder": "D1->H4->H1->M30",
-           "source": "binance (crypto) · finnhub WS+REST (forex) · deriv (V100/V25)",
+           "source": "binance (crypto) · twelvedata history + finnhub WS live (forex) · deriv (V100/V25)",
            "seed_state": SEED["state"]}
     try:
         from src.data.sources import finnhub_ws
         out["finnhub"] = finnhub_ws.status()
     except Exception:  # noqa: BLE001
         out["finnhub"] = None
+    try:
+        from src.data.sources import twelvedata
+        out["twelvedata"] = twelvedata.pool_status()
+    except Exception:  # noqa: BLE001
+        out["twelvedata"] = None
     _DATA_CACHE.update(t=time.time(), data=out)
     return jsonify(out)
 
@@ -911,7 +921,7 @@ def api_analysis():
     tf = request.args.get("tf", TF)
     if not _seeded():
         return jsonify({"seed_state": SEED["state"]})
-    # Refresh this pair/tf if data is behind (keeps chart + analysis on live TwelveData)
+    # Refresh this pair/tf if data is behind (Finnhub REST; live bars from WebSocket)
     import datetime as _dt
     data_path = config.DATA_DIR / f"{pair}_{tf}.parquet"
     tf_hours = {"M30": 0.5, "H1": 1, "H4": 4, "D1": 24}.get(tf, 4)
@@ -1060,16 +1070,23 @@ _start_scheduler()   # begin autonomous ticking (set TICK_INTERVAL=0 to disable)
 # Log data-source status at boot (helps Railway debugging — never prints the key).
 try:
     from src.data.sources import finnhub as _fh
-    from src.data.sources import finnhub_ws as _fhw
+    from src.data.sources import twelvedata as _td
     _fh_ok = _fh.available()
-    print(f"[boot] data sources: binance=BTCUSD | deriv=V100,V25 | finnhub={'ON' if _fh_ok else 'OFF (set FINNHUB_KEY)'}")
+    _td_n = _td.pool_status()["configured"]
+    print(f"[boot] data sources: binance=BTCUSD | deriv=V100,V25 | "
+          f"finnhub WS live={'ON' if _fh_ok else 'OFF (set FINNHUB_KEY)'} | "
+          f"twelvedata history={_td_n} key(s)" + ("" if _td_n else " — set TWELVEDATA_KEY[S]!"))
     print(f"[boot] DATA_DIR={config.DATA_DIR}")
+    # Start the live forex WebSocket at boot — it only needs FINNHUB_KEY and is
+    # independent of data seeding. (When parquet/model already exist, _seeded()
+    # short-circuits and _seed() never runs, so we must not rely on it here.)
+    # start_background() is idempotent, so the _seed() call is a harmless no-op.
+    if _fh_ok:
+        from src.data.sources import finnhub_ws as _fhw
+        _fhw.start_background()
 except Exception as _e:  # noqa: BLE001
     print(f"[boot] source check failed: {_e}")
 
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "8000")), debug=False)
 
 @app.route("/api/debug_signals")
 def api_debug_signals():
@@ -1103,4 +1120,69 @@ def api_debug_signals():
             except Exception as e:
                 res[pr][tf] = f"ERROR: {e}"
     return jsonify(res)
+
+
+# ---------------------------------------------------------------------------
+# Live chart data (consumed by the client-side lightweight-charts component)
+# ---------------------------------------------------------------------------
+def _to_unix_utc(idx) -> int:
+    """Parquet timestamps are tz-naive UTC — convert to unix seconds for the chart."""
+    import pandas as pd
+    ts = pd.Timestamp(idx)
+    ts = ts.tz_localize("UTC") if ts.tzinfo is None else ts.tz_convert("UTC")
+    return int(ts.timestamp())
+
+
+@app.route("/api/candles")
+def api_candles():
+    """OHLC history as JSON for the live chart. ?pair=EURUSD&tf=M30&n=400"""
+    import pandas as pd
+    pair = (request.args.get("pair") or "EURUSD").upper()
+    tf = (request.args.get("tf") or "M30").upper()
+    try:
+        n = max(20, min(int(request.args.get("n", "400")), 5000))
+    except ValueError:
+        n = 400
+    path = config.DATA_DIR / f"{pair}_{tf}.parquet"
+    if not path.exists():
+        return jsonify({"pair": pair, "tf": tf, "candles": [], "error": "no data file"}), 200
+    df = pd.read_parquet(path).tail(n)
+    candles = [
+        {
+            "time": _to_unix_utc(idx),
+            "open": float(r.open), "high": float(r.high),
+            "low": float(r.low), "close": float(r.close),
+        }
+        for idx, r in df.iterrows()
+    ]
+    # live forming price (Finnhub WS) so the frontend can extend the last candle
+    live = None
+    try:
+        from src.data.sources import finnhub_ws
+        live = finnhub_ws.live_quote(pair)
+    except Exception:  # noqa: BLE001
+        pass
+    return jsonify({"pair": pair, "tf": tf, "candles": candles, "live": live})
+
+
+@app.route("/api/live")
+def api_live():
+    """Latest live WS price(s). ?pair=EURUSD for one, or all quotes if omitted."""
+    try:
+        from src.data.sources import finnhub_ws
+        pair = request.args.get("pair")
+        if pair:
+            pair = pair.upper()
+            return jsonify({"pair": pair, "price": finnhub_ws.live_quote(pair)})
+        st = finnhub_ws.status()
+        return jsonify({"quotes": st.get("quotes", {}), "connected": st.get("connected", False),
+                        "last_trade": st.get("last_trade")})
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"error": str(e), "quotes": {}}), 200
+
+
+# Kept LAST so every @app.route above is registered before the dev server blocks here
+# (under `python -m src.webapp.app`). Gunicorn imports the module and skips this.
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "8000")), debug=False)
 

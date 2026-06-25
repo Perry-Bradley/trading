@@ -2,6 +2,10 @@ import type {
   Config, Status, Signal, JournalResponse, PairOverview, ModelInfo, DataInfo, BacktestRow, Analysis,
 } from "./types";
 
+export type Candle = { time: number; open: number; high: number; low: number; close: number };
+export type CandlesResponse = { pair: string; tf: string; candles: Candle[]; live: number | null; error?: string };
+export type LiveQuote = { pair: string; price: number | null };
+
 /** Same-origin → Next.js proxy → Python API. Works on Railway with runtime API_URL. */
 const BASE =
   typeof window !== "undefined"
@@ -24,6 +28,9 @@ export const api = {
   model: () => j<ModelInfo>("/api/model"),
   data: () => j<DataInfo>("/api/data"),
   analysis: (pair: string, tf?: string) => j<Analysis>(`/api/analysis?pair=${pair}${tf ? `&tf=${tf}` : ""}`),
+  candles: (pair: string, tf: string, n = 400) =>
+    j<CandlesResponse>(`/api/candles?pair=${pair}&tf=${tf}&n=${n}`),
+  live: (pair: string) => j<LiveQuote>(`/api/live?pair=${pair}`),
   chartUrl: (pair: string, tf: string, bust = 0, signal?: Partial<Signal>) => {
     if (!signal?.entry) return `${BASE}/api/chart?pair=${pair}&tf=${tf}&t=${bust}`;
     const q = new URLSearchParams({

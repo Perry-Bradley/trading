@@ -5,7 +5,7 @@ import { api } from "@/lib/api";
 import { useLive, fmtPrice } from "@/lib/useLive";
 import type { Config, Analysis, BacktestRow, Zone, Signal } from "@/lib/types";
 import { DirBadge, Section, Chip } from "@/components/ui";
-import { TradingViewChart } from "@/components/TradingViewChart";
+import { LiveChart } from "@/components/LiveChart";
 
 function ZoneList({ items }: { items: Zone[] }) {
   if (!items?.length) return <p className="text-sub text-sm py-1">none</p>;
@@ -55,6 +55,7 @@ export default function Pairs() {
   const [analysisErr, setAnalysisErr] = useState<string | null>(null);
   const [urlSignal, setUrlSignal] = useState<Partial<Signal> | null>(null);
   const [chartMode, setChartMode] = useState<"live" | "analysis">("live");
+  const [annot, setAnnot] = useState(true);
 
   useEffect(() => {
     api.config().then((c) => {
@@ -70,7 +71,7 @@ export default function Pairs() {
     });
     const sig = parseSignalFromUrl();
     setUrlSignal(sig);
-    if (sig?.entry) setChartMode("analysis");
+    if (sig?.entry) setChartMode("live"); // show the annotated LIVE chart for the linked signal
   }, []);
 
   const load = useCallback(async () => {
@@ -108,8 +109,9 @@ export default function Pairs() {
     <div className="space-y-4">
       <h1 className="text-xl font-bold">Pairs — chart & analysis</h1>
       <p className="text-sub text-sm">
-        Live TradingView chart plus annotated MSNR analysis (SNR zones, OB, BB, QM, BSL/SSL, FVG).
-        Analysis panels refresh every 20s from parquet data.
+        Live candle chart (your own data via Finnhub WebSocket) plus annotated MSNR analysis
+        (SNR zones, OB, BB, QM, BSL/SSL, FVG). Live price extends the forming candle every 2s;
+        analysis panels refresh every 20s from parquet data.
       </p>
 
       <div className="flex gap-2 scroll-x pb-1">
@@ -166,27 +168,33 @@ export default function Pairs() {
       )}
 
       <Section
-        title={chartSignal ? "Signal chart — zoomed to setup" : chartMode === "live" ? "Live chart" : "Annotated chart"}
+        title={chartSignal ? "Live signal chart — overlaid setup" : chartMode === "live" ? "Live chart" : "Annotated (static)"}
         right={
           <div className="flex items-center gap-2">
-            {!chartSignal && (
-              <div className="flex gap-1 bg-line/20 p-0.5 rounded-lg">
-                {(["live", "analysis"] as const).map((m) => (
-                  <button
-                    key={m}
-                    onClick={() => setChartMode(m)}
-                    className={`px-2 py-0.5 text-[10px] font-bold rounded ${chartMode === m ? "bg-brand text-white" : "text-sub hover:text-ink"}`}
-                  >
-                    {m === "live" ? "TradingView" : "MSNR overlay"}
-                  </button>
-                ))}
-              </div>
+            <div className="flex gap-1 bg-line/20 p-0.5 rounded-lg">
+              {(["live", "analysis"] as const).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => setChartMode(m)}
+                  className={`px-2 py-0.5 text-[10px] font-bold rounded ${chartMode === m ? "bg-brand text-white" : "text-sub hover:text-ink"}`}
+                >
+                  {m === "live" ? "Live" : "Static PNG"}
+                </button>
+              ))}
+            </div>
+            {chartMode === "live" && (
+              <button
+                onClick={() => setAnnot((v) => !v)}
+                className={`px-2 py-0.5 text-[10px] font-bold rounded ${annot ? "bg-up/15 text-up" : "bg-line/20 text-sub hover:text-ink"}`}
+              >
+                POIs {annot ? "on" : "off"}
+              </button>
             )}
             <span className="text-sub text-xs hidden sm:inline">SNR · OB · BB · QM · BSL/SSL · FVG</span>
           </div>
         }
       >
-        {chartSignal || chartMode === "analysis" ? (
+        {chartMode === "analysis" ? (
           loading && !bust ? (
             <div className="py-16 text-center text-sub text-sm">Loading chart for {sel} {selTf}…</div>
           ) : (
@@ -203,11 +211,12 @@ export default function Pairs() {
             />
           )
         ) : (
-          <TradingViewChart pair={sel} tf={selTf} />
+          <LiveChart pair={sel} tf={selTf} signal={chartSignal} annotate={annot} />
         )}
         {chartSignal && (
           <p className="text-sub text-[11px] mt-2">
-            Showing signal overlay from link — entry {fmtPrice(chartSignal.entry!)} · SL {fmtPrice(chartSignal.stop!)} · TP {fmtPrice(chartSignal.target!)}
+            Signal overlay from link — entry {fmtPrice(chartSignal.entry!)} · SL {fmtPrice(chartSignal.stop!)} · TP {fmtPrice(chartSignal.target!)}.
+            Switch to <b className="text-ink">Static PNG</b> for the zoomed matplotlib view.
           </p>
         )}
       </Section>

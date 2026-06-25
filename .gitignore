@@ -15,3 +15,6 @@ _lessons_text/
 
 # runtime output
 alerts.log
+
+# Local secrets — never commit
+.env

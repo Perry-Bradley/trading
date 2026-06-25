@@ -5,6 +5,7 @@ import { api } from "@/lib/api";
 import { useLive, fmtPrice } from "@/lib/useLive";
 import type { Config, Signal } from "@/lib/types";
 import { DirBadge, ConfBar, Section } from "@/components/ui";
+import { LiveChart } from "@/components/LiveChart";
 
 const HRS: Record<string, number> = { D1: 24, H4: 4, H1: 1, M30: 0.5 };
 
@@ -129,23 +130,28 @@ export default function Signals() {
                 </button>
 
                 {open && (
-                  <Section title="Signal chart — zoomed to setup" right={
-                    <a
-                      href={`/pairs?p=${s.pair}&tf=${s.tf || "H4"}&entry=${s.entry}&stop=${s.stop}&target=${s.target}&dir=${s.direction}${s.bar_idx != null ? `&bar=${s.bar_idx}` : ""}${s.zone_top != null ? `&zt=${s.zone_top}` : ""}${s.zone_bottom != null ? `&zb=${s.zone_bottom}` : ""}${s.zone_kind ? `&zk=${s.zone_kind}` : ""}${s.confluences?.length ? `&notes=${encodeURIComponent(s.confluences.slice(0, 7).join("|"))}` : ""}`}
-                      className="text-brand text-xs hover:underline"
-                    >
-                      open on Pairs page →
-                    </a>
+                  <Section title="Live signal chart — entry/SL/TP + POI annotations" right={
+                    <div className="flex items-center gap-3">
+                      <a
+                        href={api.signalChartUrl(s, bust)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-sub text-xs hover:underline"
+                      >
+                        static PNG ↗
+                      </a>
+                      <a
+                        href={`/pairs?p=${s.pair}&tf=${s.tf || "H4"}&entry=${s.entry}&stop=${s.stop}&target=${s.target}&dir=${s.direction}${s.bar_idx != null ? `&bar=${s.bar_idx}` : ""}${s.zone_top != null ? `&zt=${s.zone_top}` : ""}${s.zone_bottom != null ? `&zb=${s.zone_bottom}` : ""}${s.zone_kind ? `&zk=${s.zone_kind}` : ""}${s.confluences?.length ? `&notes=${encodeURIComponent(s.confluences.slice(0, 7).join("|"))}` : ""}`}
+                        className="text-brand text-xs hover:underline"
+                      >
+                        open on Pairs page →
+                      </a>
+                    </div>
                   }>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      key={api.signalChartUrl(s, bust)}
-                      src={api.signalChartUrl(s, bust)}
-                      alt={`${s.pair} ${s.tf} signal chart`}
-                      className="w-full rounded-xl border border-line bg-canvas"
-                    />
+                    <LiveChart pair={s.pair} tf={s.tf || "H4"} signal={s} annotate />
                     <p className="text-sub text-[11px] mt-2">
-                      POI legend: OB = Order Block · BB = Breaker · QM = Quasimodo · BSL/SSL = Liquidity sweep · FVG = Fair Value Gap
+                      Live candles from the Finnhub WebSocket. Bold lines = Entry/SL/TP · yellow dashed = the
+                      tapped POI zone · green/red dashed = OB/BB/SNR/FVG · markers = CHoCH/BOS · sweeps · QM.
                     </p>
                   </Section>
                 )}

@@ -4,6 +4,25 @@ from pathlib import Path
 
 # --- Paths -------------------------------------------------------------------
 ROOT = Path(__file__).resolve().parent
+
+
+# --- .env loader (zero-dependency) -------------------------------------------
+# Loads KEY=value pairs from a local .env so dev doesn't need shell exports.
+# On Railway, real env vars take precedence (we never overwrite what's already set).
+def _load_dotenv(path: Path) -> None:
+    if not path.exists():
+        return
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key, val = key.strip(), val.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = val
+
+
+_load_dotenv(ROOT / ".env")
 # Railway: mount persistent volume at /data and set DATA_DIR=/data
 DATA_DIR = Path(os.environ.get("DATA_DIR", str(ROOT / "data")))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
