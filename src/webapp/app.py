@@ -556,7 +556,13 @@ def api_journal():
         if "why" not in t:
             fp = get_fingerprint(t.get("features", {}))
             t["why"] = f"[{_fingerprint_name(fp)}] {t.get('direction', '').title()} setup"
-    return jsonify({"rows": trades})
+    return jsonify({
+        "rows": trades,
+        "count": journal.count(),
+        "entries": journal.count("ENTRY"),
+        "closes": journal.count("CLOSE"),
+        "last_ts": journal.last_ts(),
+    })
 
 
 def _run_and_cache_inner(refresh: bool) -> dict:

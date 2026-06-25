@@ -15,6 +15,7 @@ export default function Overview() {
   const [sigs, setSigs] = useState<Signal[]>([]);
   const [ov, setOv] = useState<PairOverview[]>([]);
   const [jr, setJr] = useState<JournalRow[]>([]);
+  const [jrMeta, setJrMeta] = useState<{ count?: number; last_ts?: string | null }>({});
 
   const load = useCallback(async () => {
     const [c, s, sg, o, j] = await Promise.all([
@@ -23,7 +24,9 @@ export default function Overview() {
       api.journal(12).catch(() => ({ rows: [] })),
     ]);
     if (c) setCfg(c); if (s) setSt(s);
-    setSigs(sg.signals || []); setOv(o.overview || []); setJr(j.rows || []);
+    setSigs(sg.signals || []); setOv(o.overview || []);
+    setJr(j.rows || []);
+    setJrMeta({ count: j.count, last_ts: j.last_ts });
   }, []);
   useLive(load);
 
@@ -82,8 +85,18 @@ export default function Overview() {
           )}
         </Section>
 
-        <Section title="Recent activity" right={<span className="text-sub text-xs">journal</span>}>
-          {jr.length === 0 ? <p className="text-sub text-sm py-2">Nothing logged yet.</p> : (
+        <Section title="Recent activity" right={<span className="text-sub text-xs">{jrMeta.last_ts ? `last ${jrMeta.last_ts.slice(11, 19)}` : "journal"}</span>}>
+          {jr.length === 0 ? (
+            <p className="text-sub text-sm py-2">
+              Nothing logged yet.
+              {st?.tick_stats && st.tick_stats.blocked_dup > 0 && st.tick_stats.journal_rows === 0 && (
+                <> Paper state was blocking trades — fixed on next deploy tick.</>
+              )}
+              {st?.tick_stats && st.tick_stats.signals_seen > 0 && st.tick_stats.conf_pass === 0 && (
+                <> {st.tick_stats.signals_seen} setups scanned, none passed filters this tick.</>
+              )}
+            </p>
+          ) : (
             <ul className="divide-y divide-line">
               {jr.map((r, i) => {
                 const close = r.event === "CLOSE", win = r.outcome === "win";

@@ -39,6 +39,18 @@ def recent(n: int = 100) -> list[dict]:
     return _rows()[-n:][::-1]
 
 
+def count(event: str | None = None) -> int:
+    rows = _rows()
+    if event is None:
+        return len(rows)
+    return sum(1 for r in rows if r.get("event") == event)
+
+
+def last_ts() -> str | None:
+    rows = _rows()
+    return rows[-1]["ts"] if rows else None
+
+
 def track_record(last_n: int | None = None) -> dict:
     """Summarise resolved (closed) trades from the journal."""
     closes = [r for r in _rows() if r["event"] == "CLOSE"]

@@ -35,6 +35,22 @@ class PaperBroker(Broker):
             self.state = {"balance": start_balance, "start_balance": start_balance,
                           "open": [], "closed": []}
             self._save()
+        self.reconcile_with_journal()
+
+    def reconcile_with_journal(self) -> bool:
+        """Reset stale paper state when the journal was wiped but state file survived."""
+        from src import journal
+
+        if journal.count("ENTRY") > 0:
+            return False
+        if not self.state.get("open") and not self.state.get("closed"):
+            return False
+        start = float(self.state.get("start_balance", 10_000.0))
+        n = len(self.state.get("closed", []))
+        print(f"[paper] journal empty but state has {n} closed — resetting paper account")
+        self.state = {"balance": start, "start_balance": start, "open": [], "closed": []}
+        self._save()
+        return True
 
     def _save(self) -> None:
         self.path.write_text(json.dumps(self.state, indent=2, default=str))

@@ -73,6 +73,14 @@ export type Status = {
   overview?: PairOverview[];
   seed_state?: string;
   when?: string;
+  tick_stats?: {
+    signals_seen: number;
+    eligible: number;
+    conf_pass: number;
+    blocked_dup: number;
+    journal_rows: number;
+    paper_closed: number;
+  };
 };
 
 export type ModelInfo = {

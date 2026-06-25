@@ -77,6 +77,11 @@ def tick(broker_kind: str = "paper", tf: str = "H4", bias_tf: str = "D1",
     entry_tfs = ["H4", "H1", "M30"] if broker.name == "paper" else [tf]
     from src.data.fetch import load
     from src.signal_filter import paper_eligible
+
+    if broker.name == "paper" and hasattr(broker, "reconcile_with_journal"):
+        broker.reconcile_with_journal()
+
+    stats = {"signals_seen": 0, "eligible": 0, "conf_pass": 0, "blocked_dup": 0}
     for pr in config.PAIRS:
         for t in entry_tfs:
             try:
@@ -85,8 +90,10 @@ def tick(broker_kind: str = "paper", tf: str = "H4", bias_tf: str = "D1",
             except FileNotFoundError:
                 continue
             for s in sigs:
+                stats["signals_seen"] += 1
                 if not paper_eligible(s, df, t):
                     continue
+                stats["eligible"] += 1
                 p = policy.proba(vec(s["features"]))
                 if broker.name == "paper":
                     size = 1.0 if p >= min_conf else 0.0
@@ -96,8 +103,10 @@ def tick(broker_kind: str = "paper", tf: str = "H4", bias_tf: str = "D1",
                 gate = broker.name == "paper" or not broker.has_open(pr)
                 if p < min_conf or size <= 0 or not gate:
                     continue
+                stats["conf_pass"] += 1
                 pos = broker.open_trade(s, size)
                 if not pos:
+                    stats["blocked_dup"] += 1
                     continue
                 opened.append(s)
                 journal.record({"ts": _dt.datetime.now().isoformat(timespec="seconds"),
@@ -118,6 +127,8 @@ def tick(broker_kind: str = "paper", tf: str = "H4", bias_tf: str = "D1",
         notify("PROGRESS", f"{len(closed)} closed | NAV {broker.nav():.2f} | record: "
                + journal.summary_line())
 
+    stats["journal_rows"] = journal.count()
+    stats["paper_closed"] = len(getattr(broker, "state", {}).get("closed", []))
     return {
         "broker": broker.name, "nav": broker.nav(), "target_r": target_r,
         "breakeven": breakeven, "n_updates": policy.n_updates,
@@ -125,6 +136,7 @@ def tick(broker_kind: str = "paper", tf: str = "H4", bias_tf: str = "D1",
         "closed": [c.to_dict() for c in closed],
         "opened": opened,
         "open_positions": [p.to_dict() for p in broker.open_positions()],
+        "tick_stats": stats,
     }
 
 
