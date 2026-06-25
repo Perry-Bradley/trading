@@ -13,8 +13,9 @@ import requests
 INTERVAL = {"D1": "1day", "H4": "4h", "H1": "1h", "M30": "30min"}
 
 # Free tier allows ~8 requests/min; keep >=8s between calls.
-_MIN_SPACING = 8.0
+_MIN_SPACING = 8.5
 _last_call = [0.0]
+_lock = __import__("threading").Lock()
 
 _KEY_NAMES = ("TWELVEDATA_KEY", "TWELVE_DATA_API_KEY", "TWELVE_DATA_KEY", "TWELVEDATA_API_KEY")
 
@@ -28,10 +29,11 @@ def api_key() -> str:
 
 
 def _throttle() -> None:
-    wait = _MIN_SPACING - (time.time() - _last_call[0])
-    if wait > 0:
-        time.sleep(wait)
-    _last_call[0] = time.time()
+    with _lock:
+        wait = _MIN_SPACING - (time.time() - _last_call[0])
+        if wait > 0:
+            time.sleep(wait)
+        _last_call[0] = time.time()
 
 
 def available() -> bool:

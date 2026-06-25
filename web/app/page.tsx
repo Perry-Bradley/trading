@@ -16,6 +16,7 @@ export default function Overview() {
   const [ov, setOv] = useState<PairOverview[]>([]);
   const [jr, setJr] = useState<JournalRow[]>([]);
   const [jrMeta, setJrMeta] = useState<{ count?: number; last_ts?: string | null }>({});
+  const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     const [c, s, sg, o, j] = await Promise.all([
@@ -23,19 +24,31 @@ export default function Overview() {
       api.signals().catch(() => ({ signals: [] })), api.overview().catch(() => ({ overview: [] })),
       api.journal(12).catch(() => ({ rows: [] } as JournalResponse)),
     ]);
-    if (c) setCfg(c); if (s) setSt(s);
-    setSigs(sg.signals || []); setOv(o.overview || []);
+    if (c) setCfg(c);
+    if (s) setSt(s);
+    setSigs(sg.signals?.length ? sg.signals : (s?.signals || []));
+    setOv(o.overview?.length ? o.overview : (s?.overview || []));
     setJr(j.rows || []);
     setJrMeta({ count: j.count, last_ts: j.last_ts });
+    setLoading(false);
   }, []);
-  useLive(load);
 
   const tr = st?.track_record;
   const be = cfg?.breakeven ?? 0.333;
+  const warming = !st || st.when === "never";
+  const pollMs = warming ? 5000 : 30000;
+  useLive(load, pollMs);
 
   return (
     <div className="space-y-4">
       <h1 className="text-xl font-bold">Overview</h1>
+
+      {loading && !st && (
+        <p className="text-sub text-sm">Connecting to API and loading market data…</p>
+      )}
+      {warming && st && (
+        <p className="text-sub text-sm">First engine tick running — pairs and journal fill in within ~1 min after deploy.</p>
+      )}
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         <StatCard label="Account NAV" value={st ? money(st.nav) : "—"} sub={cfg?.broker} />
@@ -47,7 +60,9 @@ export default function Overview() {
 
       <Section title="Pairs" right={<Link href="/pairs" className="text-brand text-xs font-medium">open pairs →</Link>}>
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-          {ov.length === 0 && <p className="text-sub text-sm">No data yet — run a tick.</p>}
+          {ov.length === 0 && !loading && (
+            <p className="text-sub text-sm">{warming ? "Waiting for first tick…" : "No pair data — run a tick."}</p>
+          )}
           {ov.map((o) => (
             <Link key={o.pair} href={`/pairs?p=${o.pair}`}
               className="flex items-center justify-between p-3 rounded-xl border border-line bg-surface hover:border-brand/40 transition">

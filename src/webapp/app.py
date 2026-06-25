@@ -75,9 +75,19 @@ def _seed() -> None:
             OnlinePolicy.bootstrap(TARGET_R)
         SEED["state"] = "ready"
         print("[seed] ready")
+        threading.Thread(target=_post_seed_tick, daemon=True, name="seed-tick").start()
     except Exception as e:  # noqa: BLE001
         SEED["state"] = f"error: {e}"
         print(f"[seed] {SEED['state']}")
+
+
+def _post_seed_tick() -> None:
+    """First tick right after seed so dashboard + journal populate without waiting."""
+    try:
+        _run_and_cache(refresh=False)
+        print("[seed] initial tick done")
+    except Exception as e:  # noqa: BLE001
+        print(f"[seed] initial tick failed: {e}")
 
 
 def _ensure_seeding() -> None:
@@ -181,9 +191,40 @@ JOURNAL_PAGE = """
 
 def _load_last() -> dict:
     if LAST_TICK.exists():
-        return json.loads(LAST_TICK.read_text())
-    return {"nav": 0, "n_updates": 0, "breakeven": 1 / (1 + TARGET_R),
-            "open_positions": [], "closed": [], "opened": [], "signals": [], "when": "never"}
+        try:
+            return json.loads(LAST_TICK.read_text())
+        except Exception:  # noqa: BLE001
+            pass
+    return {
+        "nav": 10_000.0, "n_updates": 0, "breakeven": 1 / (1 + TARGET_R),
+        "broker": BROKER, "target_r": TARGET_R,
+        "open_positions": [], "closed": [], "opened": [], "signals": [],
+        "overview": [], "when": "never",
+    }
+
+
+def _hydrate(st: dict) -> dict:
+    """Never return an empty dashboard after seed — fill from live cache/scans."""
+    st.setdefault("broker", BROKER)
+    st.setdefault("target_r", TARGET_R)
+    st.setdefault("breakeven", 1 / (1 + TARGET_R))
+    if not st.get("nav"):
+        st["nav"] = 10_000.0
+    if not _seeded():
+        st["seed_state"] = SEED["state"]
+        return st
+    try:
+        if not st.get("overview"):
+            st["overview"] = _overview()
+    except Exception:  # noqa: BLE001
+        st.setdefault("overview", [])
+    if st.get("when") == "never" or not st.get("signals"):
+        try:
+            st["signals"] = sorted(_scan_only(), key=lambda s: -s.get("conf", 0))[:20]
+        except Exception:  # noqa: BLE001
+            st.setdefault("signals", [])
+    st["seed_state"] = SEED["state"]
+    return st
 
 
 @app.route("/")
@@ -520,22 +561,17 @@ def api_config():
 @app.route("/api/status")
 def api_status():
     _ensure_seeding()
-    st = _load_last()
+    st = _hydrate(_load_last())
     from src import journal
     st["track_record"] = journal.track_record()
-    st["seed_state"] = SEED["state"]
-    if "signals" not in st:
-        st["signals"] = []
-    if "overview" not in st:
-        st["overview"] = _OVERVIEW_CACHE.get("data") or []
     return jsonify(st)
 
 
 @app.route("/api/signals")
 def api_signals():
-    """Fast: serve cached signals from last tick (never run full scan per request)."""
+    """Fast: cached signals from last tick; live scan if cache empty."""
     _ensure_seeding()
-    last = _load_last()
+    last = _hydrate(_load_last())
     return jsonify({"signals": last.get("signals", []), "seed_state": SEED["state"],
                     "when": last.get("when", "")})
 
@@ -543,9 +579,8 @@ def api_signals():
 @app.route("/api/overview")
 def api_overview():
     _ensure_seeding()
-    last = _load_last()
-    ov = last.get("overview") or _OVERVIEW_CACHE.get("data") or []
-    return jsonify({"overview": ov, "seed_state": SEED["state"]})
+    last = _hydrate(_load_last())
+    return jsonify({"overview": last.get("overview") or [], "seed_state": SEED["state"]})
 
 
 @app.route("/api/journal")
@@ -728,15 +763,16 @@ def _slow_updater() -> None:
 
 
 def _scheduler() -> None:
-    # Legacy method: kept for the initial full tick on startup.
-    # Wait for data+model to be seeded, then run an immediate tick so the
-    # dashboard fills in right after deploy.
+    # Wait for data+model to be seeded; _post_seed_tick usually runs first.
     for _ in range(180):
         if _seeded():
             break
         time.sleep(5)
+    if LAST_TICK.exists():
+        print("[scheduler] tick cache already warm — skipping duplicate initial tick")
+        return
     try:
-        _run_and_cache(refresh=True)
+        _run_and_cache(refresh=False)
         print("[scheduler] initial full tick done")
     except Exception as e:  # noqa: BLE001
         print(f"[scheduler] initial tick error: {e}")

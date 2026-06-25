@@ -42,9 +42,9 @@ def tick(broker_kind: str = "paper", tf: str = "H4", bias_tf: str = "D1",
     policy = OnlinePolicy.load_or_bootstrap(target_r)
     breakeven = 1.0 / (1.0 + target_r)
     broker = get_broker(broker_kind, base_risk_pct=0.01)
-    # Paper: trade more setups so the journal + model accumulate learning data fast.
+    # Paper: trade every eligible setup so journal + model accumulate learning data fast.
     if min_conf is None:
-        min_conf = 0.20 if broker.name == "paper" else breakeven
+        min_conf = 0.0 if broker.name == "paper" else breakeven
 
     # --- resolve finished trades and LEARN from each (the RL feedback loop) ---
     closed_all: list = []
@@ -96,12 +96,14 @@ def tick(broker_kind: str = "paper", tf: str = "H4", bias_tf: str = "D1",
                 stats["eligible"] += 1
                 p = policy.proba(vec(s["features"]))
                 if broker.name == "paper":
-                    size = 1.0 if p >= min_conf else 0.0
+                    size = 1.0
                 else:
                     size = policy.size(p)
                 s["conf"], s["size"] = p, size
                 gate = broker.name == "paper" or not broker.has_open(pr)
-                if p < min_conf or size <= 0 or not gate:
+                if broker.name != "paper" and (p < min_conf or size <= 0 or not gate):
+                    continue
+                if broker.name == "paper" and not gate:
                     continue
                 stats["conf_pass"] += 1
                 pos = broker.open_trade(s, size)

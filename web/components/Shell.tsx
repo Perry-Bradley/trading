@@ -43,9 +43,14 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     api.config().then(setCfg).catch(() => {});
     poll();
-    const t = setInterval(poll, 30000); // check backend status every 30 s
+    let t: ReturnType<typeof setInterval>;
+    const schedule = () => {
+      clearInterval(t);
+      t = setInterval(poll, when === "never" || !when ? 5000 : 30000);
+    };
+    schedule();
     return () => clearInterval(t);
-  }, [poll]);
+  }, [poll, when]);
 
   const runTick = async (rf: boolean) => {
     setBusy(rf ? "refresh" : "tick");
