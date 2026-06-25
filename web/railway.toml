@@ -1,7 +1,8 @@
 [build]
 builder = "nixpacks"
+buildCommand = "npm install && npm run build"
 
 [deploy]
-startCommand = "python -m gunicorn -b 0.0.0.0:$PORT src.webapp.app:app --timeout 300 --workers 1"
+startCommand = "npm run start"
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 5

@@ -73,15 +73,20 @@ def tick(broker_kind: str = "paper", tf: str = "H4", bias_tf: str = "D1",
     # paper tests EVERY distinct signal (accuracy reflects all predictions, not one
     # per pair); live brokers stay one-per-pair to avoid over-trading.
     opened = []
-    scan_lookback = max(lookback, 120)      # back-fill ~recent weeks so accuracy builds fast
+    scan_lookback = max(lookback, 48)
     entry_tfs = ["H4", "H1", "M30"] if broker.name == "paper" else [tf]
+    from src.data.fetch import load
+    from src.signal_filter import is_live, LIVE_MAX_AGE
     for pr in config.PAIRS:
         for t in entry_tfs:
             try:
+                df = load(pr, t)
                 sigs = backtest.signals(pr, t, bias_tf, target_r, lookback=scan_lookback)
             except FileNotFoundError:
                 continue
             for s in sigs:
+                if not is_live(s, df, t):
+                    continue
                 p = policy.proba(vec(s["features"]))
                 size = policy.size(p)
                 s["conf"], s["size"] = p, size

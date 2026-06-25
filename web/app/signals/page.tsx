@@ -44,16 +44,15 @@ export default function Signals() {
         <span className="text-sub text-sm">{sigs.length} setup{sigs.length === 1 ? "" : "s"} now</span>
       </div>
       <p className="text-sub text-sm">
-        Setups from the same data the chart uses — SNR tap + rejection in HTF bias direction.
-        Each chart is zoomed to the signal bar with POI labels (OB, BB, QM, BSL/SSL, FVG) and
-        confluence reasons drawn on it. <b className="text-up">TAKE</b> = confidence above
-        {(be * 100).toFixed(0)}% breakeven for {cfg?.target_r ?? 3}R.
+        Only <b className="text-ink">active</b> setups — still open, not stopped out, not target hit.
+        Each chart is zoomed to the signal bar with POI labels and confluence reasons.
       </p>
 
       {sigs.length === 0 ? (
-        <Section title="No fresh setups">
+        <Section title="No active setups right now">
           <p className="text-sub text-sm py-2">
-            Nothing is at a valid level right now. MSNR waits for structure + fresh level + rejection.
+            MSNR only lists trades that are <b className="text-ink">still open</b> — price has not hit stop or
+            target yet. Setups that already played out (like the 14 detected in back-scan) are hidden on purpose.
             {seed === "warming" && " (Still warming up.)"}
           </p>
         </Section>

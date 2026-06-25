@@ -225,8 +225,7 @@ def journal_page():
 def do_tick():
     refresh = request.values.get("refresh") == "1"
     st = engine.tick(BROKER, TF, BIAS_TF, TARGET_R, refresh=refresh)
-    # cache the live signals for display (highest confidence first)
-    sigs = sorted(st.get("opened", []) + _scan_only(), key=lambda s: -s.get("conf", 0))
+    sigs = sorted(_scan_only(), key=lambda s: -s.get("conf", 0))
     import datetime as _dt
     st["signals"] = sigs[:12]
     st["when"] = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -275,12 +274,9 @@ def _reason(s: dict) -> dict:
     return {"why": why, "confluences": conf, "tf": s.get("tf", TF)}
 
 
-# Maximum signal age in bars per timeframe
-# H4: 24 bars = 96h  H1: 48 bars = 48h  M30: 64 bars = 32h
-# Calendar cap only when price data itself is fresh (wall-clock vs last bar).
+# Dashboard: only setups that are still open (not stopped/targeted) and recent.
 _SIGNAL_MAX_AGE_HOURS = 48
 _STRICT_SIGNALS = os.environ.get("SIGNAL_STRICT", "0") == "1"
-_TF_MAX_AGE = {"H4": 36, "H1": 72, "M30": 96}
 _ENTRY_TFS = ["H4", "H1", "M30"]
 
 
@@ -295,55 +291,16 @@ def _ltf_zones(pr: str, ltf: str) -> list:
         return []
 
 
-def _is_active(s: dict, df) -> bool:
-    """Check if a signal has already hit its stop loss or take profit.
-    
-    Uses the last known close price as a live proxy. A signal is killed only
-    if price has CLEARLY broken through the stop or target — not just wicked it
-    on a stale bar (that would cause false negatives on fresh Railway data).
-    """
-    import pandas as pd
-    sig_time = pd.Timestamp(s["time"])
-    after = df[df.index > sig_time]
-    if after.empty:
-        return True  # No bars after signal yet — still pending entry
-
-    stop = s["stop"]
-    target = s["target"]
-    long = s["direction"] == "long"
-
-    # Check using high/low — matches backtest exit logic
-    for _, row in after.iterrows():
-        hi, lo = row["high"], row["low"]
-        if long:
-            if lo <= stop:
-                return False
-            if hi >= target:
-                return False
-        else:
-            if hi >= stop:
-                return False
-            if lo <= target:
-                return False
-    return True
-
-
 def _scan_only() -> list:
-    """Current signals across ALL entry timeframes (H4, H1, M30) and all pairs.
-
-    MSNR multi-TF rule (course ch.17):
-      H4 zones must overlap with an H1 fresh zone.
-      H1 zones must overlap with an M30 fresh zone.
-    Signals are age-filtered per-TF so only intraday setups reach the dashboard.
-    Never raises — returns [] until data + model are seeded."""
+    """Live ACTIVE signals only — not stopped out, not too old. Never raises."""
     if not _seeded():
         return []
 
     from src import backtest
+    from src.data.fetch import load
+    from src.signal_filter import LIVE_MAX_AGE, is_live
 
-    # Build LTF zone caches for multi-TF alignment (loaded once per pair)
     ltf_cache: dict[tuple, list] = {}
-    
     _ensure_fingerprints()
     news_data = _get_news()
 
@@ -353,38 +310,14 @@ def _scan_only() -> list:
     for pr in config.PAIRS:
         for entry_tf in _ENTRY_TFS:
             try:
-                max_age = _TF_MAX_AGE.get(entry_tf, 6)
-                lookback = max_age * 4  # wide scan window
+                max_age = LIVE_MAX_AGE.get(entry_tf, 8)
+                lookback = max_age + 6
+                try:
+                    df = load(pr, entry_tf)
+                except Exception:
+                    continue
                 for s in backtest.signals(pr, entry_tf, BIAS_TF, TARGET_R, lookback=lookback):
-                    if s.get("age_bars", 999) > max_age:
-                        continue
-                    from src.data.fetch import load
-                    try:
-                        df = load(pr, entry_tf)
-                    except Exception:
-                        continue
-                    # Calendar-time check: only when the underlying data is live
-                    sig_time = s.get("time")
-                    if sig_time is not None:
-                        try:
-                            if hasattr(sig_time, 'to_pydatetime'):
-                                sig_dt = sig_time.to_pydatetime().replace(tzinfo=None)
-                            else:
-                                sig_dt = _dt.datetime.fromisoformat(str(sig_time)[:16])
-                            last_bar = df.index[-1]
-                            if hasattr(last_bar, 'to_pydatetime'):
-                                last_dt = last_bar.to_pydatetime().replace(tzinfo=None)
-                            else:
-                                last_dt = _dt.datetime.fromisoformat(str(last_bar)[:16])
-                            data_age_h = (_now - last_dt).total_seconds() / 3600
-                            age_hours = (_now - sig_dt).total_seconds() / 3600
-                            tf_hours = {"M30": 0.5, "H1": 1, "H4": 4, "D1": 24}.get(entry_tf, 4)
-                            if data_age_h < tf_hours * 4 and age_hours > _SIGNAL_MAX_AGE_HOURS:
-                                continue
-                        except Exception:
-                            pass
-
-                    if not _is_active(s, df):
+                    if not is_live(s, df, entry_tf):
                         continue
 
                     # --- Multi-TF alignment check (MSNR course rule) ---
@@ -435,14 +368,15 @@ def _scan_only() -> list:
                         
                     s["conf"] = base_conf
                     s["size"] = 1.0 if base_conf >= 0.5 else 0.5
-                    
+                    s["active"] = True
+
                     s["time"] = str(s.get("time", ""))[:16]
                     s.update(_reason(s))
                     raw_signals.append({k: s[k] for k in (
                         "pair", "direction", "entry", "stop", "target", "rr",
                         "conf", "size", "features", "why", "confluences",
                         "tf", "time", "age_bars", "tf_aligned", "aligned_tf",
-                        "bar_idx", "tap_bar", "zone_top", "zone_bottom", "zone_kind",
+                        "bar_idx", "tap_bar", "zone_top", "zone_bottom", "zone_kind", "active",
                     ) if k in s})
             except FileNotFoundError:
                 pass  # pair has no data file yet — skip silently
@@ -630,8 +564,13 @@ def _run_and_cache_inner(refresh: bool) -> dict:
 
 def _run_and_cache(refresh: bool) -> dict:
     """Run one engine tick (scan, trade, learn), cache results for the dashboard."""
-    with _live_tick_lock:
+    if not _live_tick_lock.acquire(blocking=False):
+        return {"status": "busy", "seed_state": SEED["state"],
+                "when": _load_last().get("when", ""), "signals": _scan_only()}
+    try:
         return _run_and_cache_inner(refresh)
+    finally:
+        _live_tick_lock.release()
 
 
 _manual_tick_lock = threading.Lock()
@@ -703,13 +642,17 @@ def _refresh_pair(pr: str, tfs=None) -> None:
 
 
 def _live_tick() -> None:
-    """Run full engine tick: paper trade, learn, journal, refresh dashboard cache."""
+    """Run full engine tick in background — skip if one is already running."""
+    if not _seeded():
+        return
+    if not _live_tick_lock.acquire(blocking=False):
+        return
     try:
-        if not _seeded():
-            return
-        _run_and_cache(refresh=False)
+        _run_and_cache_inner(refresh=False)
     except Exception as e:  # noqa: BLE001
         print(f"  [updater] live tick failed: {e}")
+    finally:
+        _live_tick_lock.release()
 
 
 def _fast_updater() -> None:
@@ -1027,42 +970,29 @@ if __name__ == "__main__":
 
 @app.route("/api/debug_signals")
 def api_debug_signals():
-    """Return raw signal scan data to diagnose filtering."""
+    """Return raw vs live signal counts to diagnose filtering."""
     from src import backtest
+    from src.data.fetch import load
+    from src.signal_filter import LIVE_MAX_AGE, is_active, is_live
+
     res = {}
-    for pr in ["BTCUSD", "V100", "V25", "XAUUSD"]:
+    for pr in config.PAIRS:
         res[pr] = {}
-        for tf in ["H4", "H1", "M30"]:
+        for tf in _ENTRY_TFS:
             try:
-                max_age = _TF_MAX_AGE.get(tf, 12)
-                sigs = backtest.signals(pr, tf, BIAS_TF, TARGET_R, lookback=max_age * 4)
-                
-                # Check calendar age
-                import datetime as _dt
-                _now = _dt.datetime.utcnow()
-                
+                df = load(pr, tf)
+                max_age = LIVE_MAX_AGE.get(tf, 8)
+                sigs = backtest.signals(pr, tf, BIAS_TF, TARGET_R, lookback=max_age + 20)
                 out_sigs = []
                 for s in sigs:
-                    sig_time = s.get("time")
-                    age_hours = -1
-                    if sig_time is not None:
-                        try:
-                            if hasattr(sig_time, 'to_pydatetime'):
-                                sig_dt = sig_time.to_pydatetime().replace(tzinfo=None)
-                            else:
-                                sig_dt = _dt.datetime.fromisoformat(str(sig_time)[:16])
-                            age_hours = (_now - sig_dt).total_seconds() / 3600
-                        except Exception:
-                            pass
                     out_sigs.append({
-                        "time": str(sig_time),
+                        "time": str(s.get("time")),
                         "direction": s.get("direction"),
                         "entry": s.get("entry"),
                         "rr": s.get("rr"),
                         "age_bars": s.get("age_bars"),
-                        "age_hours": age_hours,
-                        "filtered_by_bars": s.get("age_bars", 999) > max_age,
-                        "filtered_by_time": age_hours > _SIGNAL_MAX_AGE_HOURS if age_hours != -1 else False
+                        "active": is_active(s, df),
+                        "live": is_live(s, df, tf),
                     })
                 res[pr][tf] = out_sigs
             except FileNotFoundError:

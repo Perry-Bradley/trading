@@ -2,10 +2,13 @@
   "name": "msnr-dashboard",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start -p ${PORT:-3000}",
+    "start": "next start --hostname 0.0.0.0 --port ${PORT:-3000}",
     "lint": "next lint"
   },
   "dependencies": {

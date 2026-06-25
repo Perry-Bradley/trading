@@ -48,6 +48,7 @@ export type Signal = {
   zone_kind?: string;
   tf_aligned?: boolean;
   aligned_tf?: string;
+  active?: boolean;
 };
 
 export type Position = {

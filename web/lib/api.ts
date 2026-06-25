@@ -2,10 +2,7 @@ import type {
   Config, Status, Signal, JournalRow, PairOverview, ModelInfo, DataInfo, BacktestRow, Analysis,
 } from "./types";
 
-/** Same-origin in browser (Next.js rewrites → Flask). Full URL for SSR fallback. */
-const BASE =
-  process.env.NEXT_PUBLIC_API_URL ||
-  (typeof window !== "undefined" ? "" : "http://localhost:8000");
+const BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 async function j<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { cache: "no-store", ...init });
@@ -14,7 +11,7 @@ async function j<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  base: BASE || "http://localhost:8000",
+  base: BASE,
   config: () => j<Config>("/api/config"),
   status: () => j<Status & { seed_state?: string }>("/api/status"),
   signals: () => j<{ signals: Signal[]; seed_state?: string }>("/api/signals"),
