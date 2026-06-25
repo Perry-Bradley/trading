@@ -23,6 +23,7 @@ export const api = {
   config: () => j<Config>("/api/config"),
   status: () => j<Status & { seed_state?: string }>("/api/status"),
   signals: () => j<{ signals: Signal[]; seed_state?: string }>("/api/signals"),
+  recentSignals: () => j<{ signals: Signal[]; seed_state?: string }>("/api/recent_signals"),
   overview: () => j<{ overview: PairOverview[]; seed_state?: string }>("/api/overview"),
   journal: (n = 60) => j<JournalResponse>(`/api/journal?n=${n}`),
   model: () => j<ModelInfo>("/api/model"),

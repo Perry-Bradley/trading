@@ -49,6 +49,7 @@ export type Signal = {
   tf_aligned?: boolean;
   aligned_tf?: string;
   active?: boolean;
+  status?: "live" | "open" | "won" | "lost";
 };
 
 export type Position = {

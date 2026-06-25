@@ -442,6 +442,82 @@ def _scan_only() -> list:
         out = raw_signals
     return out
 
+
+def _signal_outcome(s: dict, df) -> str:
+    """Resolve a setup against subsequent bars: 'won' (target first), 'lost'
+    (stop first / both in one bar = conservative), or 'open' (neither hit yet)."""
+    import pandas as pd
+    after = df[df.index > pd.Timestamp(s["time"])]
+    stop, target = s["stop"], s["target"]
+    long = s["direction"] == "long"
+    for _, row in after.iterrows():
+        hi, lo = row["high"], row["low"]
+        hit_stop = lo <= stop if long else hi >= stop
+        hit_tgt = hi >= target if long else lo <= target
+        if hit_stop and hit_tgt:
+            return "lost"          # ambiguous bar — assume worst case
+        if hit_tgt:
+            return "won"
+        if hit_stop:
+            return "lost"
+    return "open"
+
+
+_RECENT_CACHE = {"t": 0.0, "data": []}
+
+
+def _recent_signals() -> list:
+    """Recent predictions across all pairs/TFs WITH their outcome — so the
+    Signals page mirrors the journal (a signal is a prediction; the outcome is
+    whether it was right). Wider window than the strict live filter."""
+    if not _seeded():
+        return []
+    if time.time() - _RECENT_CACHE["t"] < 45 and _RECENT_CACHE["data"]:
+        return _RECENT_CACHE["data"]
+
+    from src import backtest
+    from src.data.fetch import load
+    from src.signal_filter import PAPER_MAX_AGE, LIVE_MAX_AGE
+
+    out = []
+    for pr in config.PAIRS:
+        for tf in _ENTRY_TFS:
+            max_age = PAPER_MAX_AGE.get(tf, 32)
+            try:
+                df = load(pr, tf)
+            except Exception:  # noqa: BLE001
+                continue
+            try:
+                sigs = backtest.signals(pr, tf, BIAS_TF, TARGET_R, lookback=max_age + 8)
+            except Exception as exc:  # noqa: BLE001
+                print(f"  [recent] {pr} {tf}: {exc}")
+                continue
+            for s in sigs:
+                age = s.get("age_bars", 999)
+                if age > max_age:
+                    continue
+                outcome = _signal_outcome(s, df)
+                if outcome == "open":
+                    status = "live" if age <= LIVE_MAX_AGE.get(tf, 8) else "open"
+                else:
+                    status = outcome  # won / lost
+                s["time"] = str(s.get("time", ""))[:16]
+                s.update(_reason(s))
+                s["status"] = status
+                s["active"] = outcome == "open"
+                out.append({k: s[k] for k in (
+                    "pair", "direction", "entry", "stop", "target", "rr",
+                    "conf", "size", "features", "why", "confluences",
+                    "tf", "time", "age_bars", "bar_idx", "tap_bar",
+                    "zone_top", "zone_bottom", "zone_kind", "active", "status",
+                ) if k in s})
+
+    out.sort(key=lambda s: s.get("time", ""), reverse=True)  # most recent first
+    out = out[:24]
+    _RECENT_CACHE.update(t=time.time(), data=out)
+    return out
+
+
 _NEWS_CACHE = {"t": 0.0, "data": []}
 def _get_news():
     if time.time() - _NEWS_CACHE["t"] > 3600:
@@ -584,6 +660,18 @@ def api_signals():
     last = _hydrate(_load_last())
     return jsonify({"signals": last.get("signals", []), "seed_state": SEED["state"],
                     "when": last.get("when", "")})
+
+
+@app.route("/api/recent_signals")
+def api_recent_signals():
+    """Recent predictions across all pairs WITH outcome (live/open/won/lost)."""
+    _ensure_seeding()
+    if not _seeded():
+        return jsonify({"signals": [], "seed_state": SEED["state"]})
+    try:
+        return jsonify({"signals": _recent_signals(), "seed_state": SEED["state"]})
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"signals": [], "seed_state": SEED["state"], "error": str(e)})
 
 
 @app.route("/api/overview")
