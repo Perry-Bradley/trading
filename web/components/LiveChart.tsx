@@ -60,8 +60,10 @@ export function LiveChart({
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const lastBarRef = useRef<CandlestickData | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
+  const liveLineRef = useRef<IPriceLine | null>(null);
   const [live, setLive] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [staleFuture, setStaleFuture] = useState(false);
   const [legend, setLegend] = useState<{ obs: number; bbs: number; fvgs: number; snr: number; sweeps: number; qms: number } | null>(null);
 
   // Create the chart once.
@@ -120,6 +122,10 @@ export function LiveChart({
         seriesRef.current.setData(data);
         lastBarRef.current = data[data.length - 1];
         if (r.live != null) setLive(r.live);
+        // Honesty check: is the newest bar stamped ahead of the live clock?
+        const step = TF_SECONDS[tf] ?? 1800;
+        const lastT = data[data.length - 1].time as number;
+        setStaleFuture(lastT > Math.floor(Date.now() / 1000) + step * 2);
       } catch {
         if (alive) setErr(`Cannot reach API for ${pair} ${tf}`);
       }
@@ -139,6 +145,14 @@ export function LiveChart({
         const { price } = await api.live(pair);
         if (!alive || price == null || !seriesRef.current) return;
         setLive(price);
+        // Always-on live price line — shows the real-time level even if the
+        // candle bars lag or are clock-skewed (so the chart is never "dead").
+        const series = seriesRef.current;
+        if (liveLineRef.current) { try { series.removePriceLine(liveLineRef.current); } catch { /* gone */ } }
+        liveLineRef.current = series.createPriceLine({
+          price, color: "#e6edf3", lineWidth: 1, lineStyle: LineStyle.Dotted,
+          axisLabelVisible: true, title: "LIVE",
+        });
         const nowSec = Math.floor(Date.now() / 1000);
         const barStart = (Math.floor(nowSec / step) * step) as UTCTimestamp;
         const last = lastBarRef.current;
@@ -154,7 +168,14 @@ export function LiveChart({
     };
     const liveTimer = setInterval(poll, 2000);
     poll();
-    return () => { alive = false; clearInterval(liveTimer); };
+    return () => {
+      alive = false;
+      clearInterval(liveTimer);
+      if (liveLineRef.current && seriesRef.current) {
+        try { seriesRef.current.removePriceLine(liveLineRef.current); } catch { /* gone */ }
+        liveLineRef.current = null;
+      }
+    };
   }, [pair, tf]);
 
   // Draw annotations: signal Entry/SL/TP + POI zones + structure markers.
@@ -267,6 +288,12 @@ export function LiveChart({
         {live != null && <span className="font-mono text-xs text-ink">{live.toFixed(precision)}</span>}
       </div>
       <div ref={containerRef} className="h-[480px] w-full" />
+      {staleFuture && (
+        <div className="text-[11px] text-amber-400/90 px-3 py-1.5 border-t border-line">
+          History bars are stamped ahead of the live clock (data-source skew) — the candles will tick live once
+          the history refreshes in UTC. The dotted <b className="text-ink">LIVE</b> line is the real-time price.
+        </div>
+      )}
       {annotate && legend && (
         <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-sub px-3 py-1.5 border-t border-line">
           <span>POIs drawn:</span>
