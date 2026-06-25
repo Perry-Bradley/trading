@@ -466,6 +466,54 @@ def _signal_outcome(s: dict, df) -> str:
 _RECENT_CACHE = {"t": 0.0, "data": []}
 
 
+def _open_positions_as_signals() -> list:
+    """The paper engine's OPEN trades (entry made, not yet hit SL/TP) rendered as
+    signals — these are the ground truth of 'a prediction that hasn't played out'.
+    Enriched with the same 'why'/confidence as scanned setups (rebuilt from the
+    features stored on the position)."""
+    import pandas as pd
+    from src.broker import get_broker
+    from src.data.fetch import load
+    from src.signal_filter import LIVE_MAX_AGE
+    try:
+        positions = get_broker(BROKER).open_positions()
+    except Exception:  # noqa: BLE001
+        return []
+    out = []
+    for p in positions:
+        try:
+            risk = abs(p.entry - p.stop)
+            if risk <= 0:
+                continue
+            feats = getattr(p, "features", {}) or {}
+            age = None
+            try:
+                df = load(p.pair, p.tf)
+                age = int(len(df[df.index > pd.Timestamp(p.open_time)]))
+            except Exception:  # noqa: BLE001
+                pass
+            s = {
+                "pair": p.pair, "tf": p.tf, "direction": p.direction,
+                "entry": p.entry, "stop": p.stop, "target": p.target,
+                "rr": round(abs(p.target - p.entry) / risk, 2),
+                "features": feats, "time": str(p.open_time)[:16],
+                "age_bars": age, "active": True,
+                "status": "live" if (age is not None and age <= LIVE_MAX_AGE.get(p.tf, 8)) else "open",
+                "in_trade": True,
+            }
+            s["conf"] = _FINGERPRINT_STATS.get(get_fingerprint(feats), 0.5)
+            s["size"] = 1.0
+            s.update(_reason(s))
+            out.append({k: s[k] for k in (
+                "pair", "direction", "entry", "stop", "target", "rr", "conf", "size",
+                "features", "why", "confluences", "tf", "time", "age_bars",
+                "active", "status", "in_trade",
+            ) if k in s})
+        except Exception:  # noqa: BLE001
+            continue
+    return out
+
+
 def _recent_signals() -> list:
     """Recent predictions across all pairs/TFs WITH their outcome — so the
     Signals page mirrors the journal (a signal is a prediction; the outcome is
@@ -513,9 +561,17 @@ def _recent_signals() -> list:
                 ) if k in s})
 
     out.sort(key=lambda s: s.get("time", ""), reverse=True)  # most recent first
-    out = out[:24]
-    _RECENT_CACHE.update(t=time.time(), data=out)
-    return out
+
+    # Merge the paper engine's OPEN trades (entry made, not yet resolved). These
+    # are authoritative "still-running predictions" — the scan can miss them once
+    # they age past its lookback window, so include them explicitly and first.
+    opens = _open_positions_as_signals()
+    seen = {(o["pair"], o["tf"], o["time"]) for o in opens}
+    scanned = [s for s in out if (s["pair"], s.get("tf"), s.get("time")) not in seen]
+    merged = opens + scanned[:24]
+
+    _RECENT_CACHE.update(t=time.time(), data=merged)
+    return merged
 
 
 _NEWS_CACHE = {"t": 0.0, "data": []}

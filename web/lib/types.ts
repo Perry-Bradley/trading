@@ -50,6 +50,7 @@ export type Signal = {
   aligned_tf?: string;
   active?: boolean;
   status?: "live" | "open" | "won" | "lost";
+  in_trade?: boolean;
 };
 
 export type Position = {

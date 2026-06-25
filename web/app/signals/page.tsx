@@ -30,6 +30,9 @@ function SignalCard({
           <DirBadge dir={s.direction} />
           <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-brand/10 text-brand">{s.tf || "H4"}</span>
           <StatusBadge s={s} />
+          {s.in_trade && (
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-yellow-500/15 text-yellow-400">IN TRADE</span>
+          )}
           <span className="text-sub text-xs">
             1:{s.rr?.toFixed(2) ?? 3}{s.time ? ` · ${s.time}` : ""}
           </span>
