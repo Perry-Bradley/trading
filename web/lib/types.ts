@@ -112,6 +112,9 @@ export type Analysis = {
   pair: string; tf: string; bias_tf: string; price: number; bias: string;
   breaks: Brk[]; fresh_snr: Zone[]; order_blocks: Zone[]; fvgs: Zone[]; sweeps: Sweep[];
   breakers: Zone[]; quasimodos: QM[];
+  last_bar?: string;
+  now_utc?: string;
+  stale_minutes?: number;
   seed_state?: string;
 };
 

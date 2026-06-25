@@ -44,7 +44,7 @@ def tick(broker_kind: str = "paper", tf: str = "H4", bias_tf: str = "D1",
     broker = get_broker(broker_kind, base_risk_pct=0.01)
     # Paper: trade more setups so the journal + model accumulate learning data fast.
     if min_conf is None:
-        min_conf = 0.30 if broker.name == "paper" else breakeven
+        min_conf = 0.20 if broker.name == "paper" else breakeven
 
     # --- resolve finished trades and LEARN from each (the RL feedback loop) ---
     closed_all: list = []
@@ -76,7 +76,7 @@ def tick(broker_kind: str = "paper", tf: str = "H4", bias_tf: str = "D1",
     scan_lookback = max(lookback, 48)
     entry_tfs = ["H4", "H1", "M30"] if broker.name == "paper" else [tf]
     from src.data.fetch import load
-    from src.signal_filter import is_live, LIVE_MAX_AGE
+    from src.signal_filter import paper_eligible
     for pr in config.PAIRS:
         for t in entry_tfs:
             try:
@@ -85,10 +85,13 @@ def tick(broker_kind: str = "paper", tf: str = "H4", bias_tf: str = "D1",
             except FileNotFoundError:
                 continue
             for s in sigs:
-                if not is_live(s, df, t):
+                if not paper_eligible(s, df, t):
                     continue
                 p = policy.proba(vec(s["features"]))
-                size = policy.size(p)
+                if broker.name == "paper":
+                    size = 1.0 if p >= min_conf else 0.0
+                else:
+                    size = policy.size(p)
                 s["conf"], s["size"] = p, size
                 gate = broker.name == "paper" or not broker.has_open(pr)
                 if p < min_conf or size <= 0 or not gate:

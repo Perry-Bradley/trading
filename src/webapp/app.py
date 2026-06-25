@@ -853,6 +853,24 @@ def api_analysis():
     tf = request.args.get("tf", TF)
     if not _seeded():
         return jsonify({"seed_state": SEED["state"]})
+    # Refresh this pair/tf if data is behind (keeps chart + analysis on live TwelveData)
+    import datetime as _dt
+    data_path = config.DATA_DIR / f"{pair}_{tf}.parquet"
+    tf_hours = {"M30": 0.5, "H1": 1, "H4": 4, "D1": 24}.get(tf, 4)
+    try:
+        if data_path.exists():
+            import pandas as pd
+            last_ts = pd.read_parquet(data_path, columns=["close"]).index.max()
+            age_h = (_dt.datetime.utcnow() - pd.Timestamp(last_ts).to_pydatetime()).total_seconds() / 3600
+            if age_h > tf_hours * 1.2:
+                from src.data import fetch
+                fetch.save(pair, tf)
+                _ANALYSIS_CACHE.clear()
+        elif _seeded():
+            from src.data import fetch
+            fetch.save(pair, tf)
+    except Exception:  # noqa: BLE001
+        pass
     c = _ANALYSIS_CACHE.get(f"{pair}_{tf}")
     if c and time.time() - c[0] < 60:
         return jsonify(c[1])
@@ -879,9 +897,14 @@ def api_analysis():
                  "time": str(b.time)[:16]} for b in smc.breaker_blocks(df)[-6:]][::-1]
     qms = [{"kind": q.kind, "sweep": round(q.sweep_level, 5), "choch": round(q.choch_level, 5),
             "time": str(q.time)[:16]} for q in smc.quasimodos(df)[-6:]][::-1]
+    now_utc = _dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    last_bar = str(df.index[-1])[:16]
+    last_dt = pd.Timestamp(df.index[-1]).to_pydatetime()
+    stale_min = int((_dt.datetime.utcnow() - last_dt).total_seconds() / 60)
     out = {"pair": pair, "tf": tf, "bias_tf": BIAS_TF, "price": round(float(df["close"].iat[-1]), 5),
            "bias": bias, "breaks": breaks, "fresh_snr": fresh, "order_blocks": obs,
-           "fvgs": fvgs, "sweeps": sweeps, "breakers": breakers, "quasimodos": qms}
+           "fvgs": fvgs, "sweeps": sweeps, "breakers": breakers, "quasimodos": qms,
+           "last_bar": last_bar, "now_utc": now_utc, "stale_minutes": stale_min}
     _ANALYSIS_CACHE[f"{pair}_{tf}"] = (time.time(), out)
     return jsonify(out)
 
@@ -915,7 +938,7 @@ def api_chart():
             import pandas as pd
             last_ts = pd.read_parquet(data_path, columns=["close"]).index.max()
             age_h = (_dt.datetime.utcnow() - pd.Timestamp(last_ts).to_pydatetime()).total_seconds() / 3600
-            if age_h > tf_hours * 2.5:
+            if age_h > tf_hours * 1.2:
                 from src.data import fetch
                 fetch.save(pair, tf)
                 _ANALYSIS_CACHE.clear()

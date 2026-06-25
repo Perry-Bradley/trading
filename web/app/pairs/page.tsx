@@ -5,6 +5,7 @@ import { api } from "@/lib/api";
 import { useLive, fmtPrice } from "@/lib/useLive";
 import type { Config, Analysis, BacktestRow, Zone, Signal } from "@/lib/types";
 import { DirBadge, Section, Chip } from "@/components/ui";
+import { TradingViewChart } from "@/components/TradingViewChart";
 
 function ZoneList({ items }: { items: Zone[] }) {
   if (!items?.length) return <p className="text-sub text-sm py-1">none</p>;
@@ -53,6 +54,7 @@ export default function Pairs() {
   const [loading, setLoading] = useState(true);
   const [analysisErr, setAnalysisErr] = useState<string | null>(null);
   const [urlSignal, setUrlSignal] = useState<Partial<Signal> | null>(null);
+  const [chartMode, setChartMode] = useState<"live" | "analysis">("live");
 
   useEffect(() => {
     api.config().then((c) => {
@@ -66,7 +68,9 @@ export default function Pairs() {
     }).catch(() => {
       setAnalysisErr("Cannot reach API — start the backend: python -m src.webapp.app");
     });
-    setUrlSignal(parseSignalFromUrl());
+    const sig = parseSignalFromUrl();
+    setUrlSignal(sig);
+    if (sig?.entry) setChartMode("analysis");
   }, []);
 
   const load = useCallback(async () => {
@@ -104,8 +108,8 @@ export default function Pairs() {
     <div className="space-y-4">
       <h1 className="text-xl font-bold">Pairs — chart & analysis</h1>
       <p className="text-sub text-sm">
-        Annotated chart with SNR zones, structure, and SMC POIs (OB, BB, QM, BSL/SSL, FVG).
-        Charts refresh every 20s from live parquet data.
+        Live TradingView chart plus annotated MSNR analysis (SNR zones, OB, BB, QM, BSL/SSL, FVG).
+        Analysis panels refresh every 20s from parquet data.
       </p>
 
       <div className="flex gap-2 scroll-x pb-1">
@@ -133,6 +137,17 @@ export default function Pairs() {
         {a && (
           <span className="text-sub text-sm">
             price <b className="font-mono text-ink">{fmtPrice(a.price)}</b> · {a.tf}/{a.bias_tf} bias
+            {a.now_utc && (
+              <> · now <b className="font-mono text-ink">{a.now_utc}</b></>
+            )}
+            {a.last_bar && (
+              <> · last bar <b className="font-mono text-ink">{a.last_bar}</b></>
+            )}
+          </span>
+        )}
+        {a && a.stale_minutes != null && a.stale_minutes > 60 && (
+          <span className="text-[11px] text-amber-400/90">
+            data {a.stale_minutes}m stale — refreshing on next load
           </span>
         )}
         <button
@@ -151,23 +166,44 @@ export default function Pairs() {
       )}
 
       <Section
-        title={chartSignal ? "Signal chart — zoomed to setup" : "Annotated chart"}
-        right={<span className="text-sub text-xs">SNR · OB · BB · QM · BSL/SSL · FVG</span>}
+        title={chartSignal ? "Signal chart — zoomed to setup" : chartMode === "live" ? "Live chart" : "Annotated chart"}
+        right={
+          <div className="flex items-center gap-2">
+            {!chartSignal && (
+              <div className="flex gap-1 bg-line/20 p-0.5 rounded-lg">
+                {(["live", "analysis"] as const).map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => setChartMode(m)}
+                    className={`px-2 py-0.5 text-[10px] font-bold rounded ${chartMode === m ? "bg-brand text-white" : "text-sub hover:text-ink"}`}
+                  >
+                    {m === "live" ? "TradingView" : "MSNR overlay"}
+                  </button>
+                ))}
+              </div>
+            )}
+            <span className="text-sub text-xs hidden sm:inline">SNR · OB · BB · QM · BSL/SSL · FVG</span>
+          </div>
+        }
       >
-        {loading && !bust ? (
-          <div className="py-16 text-center text-sub text-sm">Loading chart for {sel} {selTf}…</div>
+        {chartSignal || chartMode === "analysis" ? (
+          loading && !bust ? (
+            <div className="py-16 text-center text-sub text-sm">Loading chart for {sel} {selTf}…</div>
+          ) : (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              key={`${sel}-${selTf}-${bust}-${chartSignal?.entry ?? 0}`}
+              src={api.chartUrl(sel, selTf, bust, chartSignal as Signal | undefined)}
+              alt={`${sel} ${selTf} chart`}
+              className="w-full rounded-xl border border-line bg-surface min-h-[200px]"
+              onError={(e) => {
+                (e.target as HTMLImageElement).style.display = "none";
+                setAnalysisErr(`Chart failed to load for ${sel} ${selTf}. Start backend: python -m src.webapp.app`);
+              }}
+            />
+          )
         ) : (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            key={`${sel}-${selTf}-${bust}-${chartSignal?.entry ?? 0}`}
-            src={api.chartUrl(sel, selTf, bust, chartSignal as Signal | undefined)}
-            alt={`${sel} ${selTf} chart`}
-            className="w-full rounded-xl border border-line bg-surface min-h-[200px]"
-            onError={(e) => {
-              (e.target as HTMLImageElement).style.display = "none";
-              setAnalysisErr(`Chart failed to load for ${sel} ${selTf}. Start backend: python -m src.webapp.app`);
-            }}
-          />
+          <TradingViewChart pair={sel} tf={selTf} />
         )}
         {chartSignal && (
           <p className="text-sub text-[11px] mt-2">

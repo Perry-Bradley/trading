@@ -39,7 +39,7 @@ export default function Overview() {
         <StatCard label="Total R" value={tr ? `${tr.total_r >= 0 ? "+" : ""}${tr.total_r.toFixed(1)}R` : "—"} tone={tr && tr.total_r >= 0 ? "up" : "down"} sub={`${tr?.resolved ?? 0} resolved`} />
         <StatCard label="Win rate" value={tr ? `${(tr.win_rate * 100).toFixed(0)}%` : "—"} sub={`breakeven ${(be * 100).toFixed(0)}%`} tone={tr && tr.win_rate >= be ? "up" : "neutral"} />
         <StatCard label="Expectancy" value={tr ? `${tr.expectancy_r >= 0 ? "+" : ""}${tr.expectancy_r.toFixed(2)}R` : "—"} tone={tr && tr.expectancy_r >= 0 ? "up" : "down"} sub="per trade" />
-        <StatCard label="Learned from" value={st ? String(st.n_updates) : "—"} sub="live trades" />
+        <StatCard label="Open / learned" value={st ? `${st.open_positions?.length ?? 0} open` : "—"} sub={st ? `${st.n_updates} closed · tick ${st.when?.slice(11, 19) ?? "—"}` : "live trades"} />
       </div>
 
       <Section title="Pairs" right={<Link href="/pairs" className="text-brand text-xs font-medium">open pairs →</Link>}>
@@ -63,7 +63,11 @@ export default function Overview() {
 
       <div className="grid lg:grid-cols-2 gap-4">
         <Section title="Live signals" right={<Link href="/signals" className="text-brand text-xs font-medium">all →</Link>}>
-          {sigs.length === 0 ? <p className="text-sub text-sm py-2">No fresh setups (MSNR is low-frequency).</p> : (
+          {sigs.length === 0 ? (
+            <p className="text-sub text-sm py-2">
+              No fresh active setups — MSNR is low-frequency. Paper engine still replays recent setups in the background.
+            </p>
+          ) : (
             <ul className="space-y-2">
               {sigs.slice(0, 6).map((s, i) => (
                 <li key={i} className="flex items-center justify-between p-2.5 rounded-lg border border-line">
