@@ -196,9 +196,11 @@ def _symbol(pair: str) -> str:
 
 
 def _fetch_with_key(pair: str, tf: str, key: str, outputsize: int) -> pd.DataFrame:
+    # timezone=UTC: TwelveData otherwise returns exchange-local timestamps, which
+    # don't line up with the Finnhub WebSocket (UTC) and put bars in the "future".
     url = ("https://api.twelvedata.com/time_series"
            f"?symbol={_symbol(pair)}&interval={INTERVAL[tf]}"
-           f"&outputsize={outputsize}&apikey={key}&format=JSON")
+           f"&outputsize={outputsize}&timezone=UTC&apikey={key}&format=JSON")
     _throttle()
     j = requests.get(url, timeout=30).json()
     if "values" not in j:
