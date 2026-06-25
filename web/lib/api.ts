@@ -2,7 +2,10 @@ import type {
   Config, Status, Signal, JournalRow, PairOverview, ModelInfo, DataInfo, BacktestRow, Analysis,
 } from "./types";
 
-const BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+/** Same-origin in browser (Next.js rewrites → Flask). Full URL for SSR fallback. */
+const BASE =
+  process.env.NEXT_PUBLIC_API_URL ||
+  (typeof window !== "undefined" ? "" : "http://localhost:8000");
 
 async function j<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { cache: "no-store", ...init });
@@ -11,7 +14,7 @@ async function j<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  base: BASE,
+  base: BASE || "http://localhost:8000",
   config: () => j<Config>("/api/config"),
   status: () => j<Status & { seed_state?: string }>("/api/status"),
   signals: () => j<{ signals: Signal[]; seed_state?: string }>("/api/signals"),
@@ -20,12 +23,27 @@ export const api = {
   model: () => j<ModelInfo>("/api/model"),
   data: () => j<DataInfo>("/api/data"),
   analysis: (pair: string, tf?: string) => j<Analysis>(`/api/analysis?pair=${pair}${tf ? `&tf=${tf}` : ""}`),
-  chartUrl: (pair: string, tf: string, bust = 0) => `${BASE}/api/chart?pair=${pair}&tf=${tf}&t=${bust}`,
-  signalChartUrl: (s: { pair: string; tf?: string; entry: number; stop: number; target: number; direction: string }, bust = 0) =>
-    `${BASE}/api/chart?pair=${s.pair}&tf=${s.tf || "H4"}&entry=${s.entry}&stop=${s.stop}&target=${s.target}&dir=${s.direction}&t=${bust}`,
+  chartUrl: (pair: string, tf: string, bust = 0, signal?: Partial<Signal>) => {
+    if (!signal?.entry) return `${BASE}/api/chart?pair=${pair}&tf=${tf}&t=${bust}`;
+    const q = new URLSearchParams({
+      pair,
+      tf,
+      entry: String(signal.entry),
+      stop: String(signal.stop!),
+      target: String(signal.target!),
+      dir: signal.direction || "long",
+      t: String(bust),
+    });
+    if (signal.bar_idx != null) q.set("bar", String(signal.bar_idx));
+    if (signal.zone_top != null) q.set("zt", String(signal.zone_top));
+    if (signal.zone_bottom != null) q.set("zb", String(signal.zone_bottom));
+    if (signal.zone_kind) q.set("zk", signal.zone_kind);
+    if (signal.confluences?.length) q.set("notes", signal.confluences.slice(0, 7).join("|"));
+    return `${BASE}/api/chart?${q.toString()}`;
+  },
+  signalChartUrl: (s: Signal, bust = 0) => api.chartUrl(s.pair, s.tf || "H4", bust, s),
   backtest: (pair?: string) =>
     j<{ results: BacktestRow[]; seed_state?: string }>(`/api/backtest${pair ? `?pair=${pair}` : ""}`),
   tick: (refresh = false) =>
     j<Status>(`/api/tick?refresh=${refresh ? 1 : 0}`, { method: "POST" }),
 };
-

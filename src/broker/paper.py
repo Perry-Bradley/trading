@@ -101,17 +101,17 @@ class PaperBroker(Broker):
         cost_r = (COST_PIPS.get(pos.pair, 1.5) * config.pip_size(pos.pair)) / risk_dist
         long = pos.direction == "long"
         for t, row in after.iterrows():
-            close = row["close"]
+            hi, lo = row["high"], row["low"]
             hit = None
             if long:
-                if close <= pos.stop:
+                if lo <= pos.stop:
                     hit = ("loss", pos.stop, -1.0)
-                elif close >= pos.target:
+                elif hi >= pos.target:
                     hit = ("win", pos.target, target_r)
             else:
-                if close >= pos.stop:
+                if hi >= pos.stop:
                     hit = ("loss", pos.stop, -1.0)
-                elif close <= pos.target:
+                elif lo <= pos.target:
                     hit = ("win", pos.target, target_r)
             if hit:
                 outcome, exitp, r = hit

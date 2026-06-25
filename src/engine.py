@@ -41,8 +41,10 @@ def tick(broker_kind: str = "paper", tf: str = "H4", bias_tf: str = "D1",
 
     policy = OnlinePolicy.load_or_bootstrap(target_r)
     breakeven = 1.0 / (1.0 + target_r)
-    min_conf = breakeven if min_conf is None else min_conf
     broker = get_broker(broker_kind, base_risk_pct=0.01)
+    # Paper: trade more setups so the journal + model accumulate learning data fast.
+    if min_conf is None:
+        min_conf = 0.30 if broker.name == "paper" else breakeven
 
     # --- resolve finished trades and LEARN from each (the RL feedback loop) ---
     closed_all: list = []

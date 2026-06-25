@@ -3,10 +3,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useLive, fmtPrice } from "@/lib/useLive";
-import type { Config, Analysis, BacktestRow, Zone } from "@/lib/types";
+import type { Config, Analysis, BacktestRow, Zone, Signal } from "@/lib/types";
 import { DirBadge, Section, Chip } from "@/components/ui";
 
-function ZoneList({ items, color }: { items: Zone[]; color?: string }) {
+function ZoneList({ items }: { items: Zone[] }) {
   if (!items?.length) return <p className="text-sub text-sm py-1">none</p>;
   return (
     <ul className="space-y-1.5">
@@ -22,15 +22,37 @@ function ZoneList({ items, color }: { items: Zone[]; color?: string }) {
   );
 }
 
+function parseSignalFromUrl(): Partial<Signal> | null {
+  if (typeof window === "undefined") return null;
+  const sp = new URLSearchParams(window.location.search);
+  const entry = sp.get("entry");
+  if (!entry) return null;
+  return {
+    pair: sp.get("p") || "",
+    tf: sp.get("tf") || "H4",
+    direction: (sp.get("dir") as "long" | "short") || "long",
+    entry: parseFloat(entry),
+    stop: parseFloat(sp.get("stop") || "0"),
+    target: parseFloat(sp.get("target") || "0"),
+    bar_idx: sp.get("bar") ? parseInt(sp.get("bar")!, 10) : undefined,
+    zone_top: sp.get("zt") ? parseFloat(sp.get("zt")!) : undefined,
+    zone_bottom: sp.get("zb") ? parseFloat(sp.get("zb")!) : undefined,
+    zone_kind: sp.get("zk") || undefined,
+    confluences: sp.get("notes")?.split("|").filter(Boolean),
+  };
+}
+
 export default function Pairs() {
   const [cfg, setCfg] = useState<Config | null>(null);
-  const [sel, setSel] = useState<string>("");
-  const [selTf, setSelTf] = useState<string>("");
+  const [sel, setSel] = useState("EURUSD");
+  const [selTf, setSelTf] = useState("H4");
   const [a, setA] = useState<Analysis | null>(null);
   const [bt, setBt] = useState<BacktestRow | null>(null);
   const [btBusy, setBtBusy] = useState(false);
   const [bust, setBust] = useState(0);
+  const [loading, setLoading] = useState(true);
   const [analysisErr, setAnalysisErr] = useState<string | null>(null);
+  const [urlSignal, setUrlSignal] = useState<Partial<Signal> | null>(null);
 
   useEffect(() => {
     api.config().then((c) => {
@@ -38,57 +60,128 @@ export default function Pairs() {
       const sp = new URLSearchParams(window.location.search);
       const p = sp.get("p");
       const tf = sp.get("tf");
-      setSel(p && c.pairs.includes(p) ? p : c.pairs[0]);
-      setSelTf(tf && ["H4", "H1", "M30"].includes(tf) ? tf : c.tf);
-    }).catch(() => {});
+      if (p && c.pairs.includes(p)) setSel(p);
+      if (tf && ["H4", "H1", "M30"].includes(tf)) setSelTf(tf);
+      else setSelTf(c.tf);
+    }).catch(() => {
+      setAnalysisErr("Cannot reach API — start the backend: python -m src.webapp.app");
+    });
+    setUrlSignal(parseSignalFromUrl());
   }, []);
-
 
   const load = useCallback(async () => {
     if (!sel || !selTf) return;
+    setLoading(true);
+    setAnalysisErr(null);
     try {
-      setAnalysisErr(null);
       setA(await api.analysis(sel, selTf));
       setBust(Date.now());
-    } catch (e: any) {
-      setAnalysisErr(e?.message ?? "Failed to load analysis");
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Failed to load analysis";
+      setAnalysisErr(`${msg}. Is the Python API running on port 8000?`);
+      setA(null);
+    } finally {
+      setLoading(false);
     }
   }, [sel, selTf]);
-  useLive(load);
+  useLive(load, 20000);
 
   const runBt = async () => {
     if (!sel) return;
     setBtBusy(true);
-    try { const r = await api.backtest(sel); setBt(r.results?.[0] ?? null); } finally { setBtBusy(false); }
+    try {
+      const r = await api.backtest(sel);
+      setBt(r.results?.[0] ?? null);
+    } finally {
+      setBtBusy(false);
+    }
   };
+
+  const pairs = cfg?.pairs ?? ["EURUSD", "GBPUSD", "AUDUSD", "XAUUSD", "BTCUSD", "V100", "V25"];
+  const chartSignal = urlSignal?.entry ? urlSignal : undefined;
 
   return (
     <div className="space-y-4">
       <h1 className="text-xl font-bold">Pairs — chart & analysis</h1>
+      <p className="text-sub text-sm">
+        Annotated chart with SNR zones, structure, and SMC POIs (OB, BB, QM, BSL/SSL, FVG).
+        Charts refresh every 20s from live parquet data.
+      </p>
 
       <div className="flex gap-2 scroll-x pb-1">
-        {(cfg?.pairs ?? []).map((p) => (
-          <Chip key={p} active={sel === p} onClick={() => { setSel(p); setBt(null); }}>{p}</Chip>
+        {pairs.map((p) => (
+          <Chip key={p} active={sel === p} onClick={() => { setSel(p); setBt(null); setUrlSignal(null); }}>
+            {p}
+          </Chip>
         ))}
       </div>
 
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="text-2xl font-bold">{sel}</span>
+        <div className="flex gap-1 bg-line/20 p-1 rounded-lg">
+          {["H4", "H1", "M30"].map((t) => (
+            <button
+              key={t}
+              onClick={() => { setSelTf(t); setA(null); }}
+              className={`px-2 py-0.5 text-xs font-bold rounded ${selTf === t ? "bg-brand text-white" : "text-sub hover:text-ink"}`}
+            >
+              {t}
+            </button>
+          ))}
+        </div>
+        {a && <DirBadge dir={a.bias} />}
+        {a && (
+          <span className="text-sub text-sm">
+            price <b className="font-mono text-ink">{fmtPrice(a.price)}</b> · {a.tf}/{a.bias_tf} bias
+          </span>
+        )}
+        <button
+          onClick={runBt}
+          disabled={btBusy || loading}
+          className="ml-auto px-3.5 py-1.5 rounded-lg bg-brand text-white text-sm font-medium disabled:opacity-50"
+        >
+          {btBusy ? "Testing…" : "Backtest this pair"}
+        </button>
+      </div>
+
+      {analysisErr && (
+        <div className="p-3 rounded-xl bg-down/5 border border-down/30 text-down text-sm">
+          {analysisErr}
+        </div>
+      )}
+
+      <Section
+        title={chartSignal ? "Signal chart — zoomed to setup" : "Annotated chart"}
+        right={<span className="text-sub text-xs">SNR · OB · BB · QM · BSL/SSL · FVG</span>}
+      >
+        {loading && !bust ? (
+          <div className="py-16 text-center text-sub text-sm">Loading chart for {sel} {selTf}…</div>
+        ) : (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            key={`${sel}-${selTf}-${bust}-${chartSignal?.entry ?? 0}`}
+            src={api.chartUrl(sel, selTf, bust, chartSignal as Signal | undefined)}
+            alt={`${sel} ${selTf} chart`}
+            className="w-full rounded-xl border border-line bg-surface min-h-[200px]"
+            onError={(e) => {
+              (e.target as HTMLImageElement).style.display = "none";
+              setAnalysisErr(`Chart failed to load for ${sel} ${selTf}. Start backend: python -m src.webapp.app`);
+            }}
+          />
+        )}
+        {chartSignal && (
+          <p className="text-sub text-[11px] mt-2">
+            Showing signal overlay from link — entry {fmtPrice(chartSignal.entry!)} · SL {fmtPrice(chartSignal.stop!)} · TP {fmtPrice(chartSignal.target!)}
+          </p>
+        )}
+      </Section>
+
+      {loading && !a && (
+        <p className="text-sub text-sm">Loading POI analysis panels…</p>
+      )}
+
       {a && (
         <>
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="text-2xl font-bold">{a.pair}</span>
-            <div className="flex gap-1 ml-2 bg-line/20 p-1 rounded-lg">
-              {["H4", "H1", "M30"].map(t => (
-                <button key={t} onClick={() => { setSelTf(t); setA(null); }} className={`px-2 py-0.5 text-xs font-bold rounded ${selTf === t ? "bg-brand text-white" : "text-sub hover:text-ink"}`}>{t}</button>
-              ))}
-            </div>
-            <DirBadge dir={a.bias} />
-            <span className="text-sub text-sm">price <b className="font-mono text-ink">{fmtPrice(a.price)}</b> · {a.tf}/{a.bias_tf} bias</span>
-            <button onClick={runBt} disabled={btBusy}
-              className="ml-auto px-3.5 py-1.5 rounded-lg bg-brand text-white text-sm font-medium disabled:opacity-50">
-              {btBusy ? "Testing…" : "Backtest this pair"}
-            </button>
-          </div>
-
           {bt && !bt.error && (
             <Section title={`Backtest — ${bt.pair} (${cfg?.tf}/${cfg?.bias_tf}, ${cfg?.target_r}R)`}>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
@@ -103,19 +196,6 @@ export default function Pairs() {
               </div>
             </Section>
           )}
-
-          <Section title="Annotated chart" right={<span className="text-sub text-xs">SNR zones · structure · rejections</span>}>
-            {cfg && (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                key={`${a.pair}-${selTf}-${bust}`}
-                src={api.chartUrl(a.pair, selTf || a.tf, bust)}
-                alt={`${a.pair} chart`}
-                className="w-full rounded-xl border border-line bg-surface"
-                onError={(e) => { (e.target as HTMLImageElement).alt = `Chart unavailable for ${a.pair} ${selTf} — data is being fetched in the background`; }}
-              />
-            )}
-          </Section>
 
           <div className="grid lg:grid-cols-2 gap-4">
             <Section title="Quasimodo (QML) — premium reversals">

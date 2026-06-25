@@ -218,12 +218,7 @@ def journal_page():
     for t in trades:
         if "why" not in t:
             fp = get_fingerprint(t.get("features", {}))
-            fp_name = "Standard MSNR"
-            if fp == "QML": fp_name = "Quasimodo (QML)"
-            elif fp == "TurtleSoup": fp_name = "Turtle Soup / SH+BMS+RTO"
-            elif fp == "Flipped": fp_name = "SBR/RBS Flip"
-            elif fp == "OB_FVG": fp_name = "Order Block / FVG"
-            t["why"] = f"[{fp_name}] {t.get('direction', '').title()} setup"
+            t["why"] = f"[{_fingerprint_name(fp)}] {t.get('direction', '').title()} setup"
     return render_template_string(JOURNAL_PAGE, trades=trades, record=record)
 
 @app.route("/tick", methods=["POST", "GET"])
@@ -282,10 +277,11 @@ def _reason(s: dict) -> dict:
 
 # Maximum signal age in bars per timeframe
 # H4: 24 bars = 96h  H1: 48 bars = 48h  M30: 64 bars = 32h
-# Calendar cap: signals older than 48h wall-clock are dropped from the live dashboard.
-_TF_MAX_AGE = {"H4": 24, "H1": 48, "M30": 64}
-_SIGNAL_MAX_AGE_HOURS = 48   # show setups up to 2 days old (active filter removes dead ones)
-_ENTRY_TFS = ["H4", "H1", "M30"]              # scan all three
+# Calendar cap only when price data itself is fresh (wall-clock vs last bar).
+_SIGNAL_MAX_AGE_HOURS = 48
+_STRICT_SIGNALS = os.environ.get("SIGNAL_STRICT", "0") == "1"
+_TF_MAX_AGE = {"H4": 36, "H1": 72, "M30": 96}
+_ENTRY_TFS = ["H4", "H1", "M30"]
 
 
 def _ltf_zones(pr: str, ltf: str) -> list:
@@ -316,20 +312,19 @@ def _is_active(s: dict, df) -> bool:
     target = s["target"]
     long = s["direction"] == "long"
 
-    # Check using CLOSE prices only (not high/low wicks) — more conservative,
-    # prevents stale bar wicks from killing genuinely active signals
+    # Check using high/low — matches backtest exit logic
     for _, row in after.iterrows():
-        close = row["close"]
+        hi, lo = row["high"], row["low"]
         if long:
-            if close <= stop:
-                return False  # Closed below stop — definitely dead
-            if close >= target:
-                return False  # Closed above target — profit taken
+            if lo <= stop:
+                return False
+            if hi >= target:
+                return False
         else:
-            if close >= stop:
-                return False  # Closed above stop — definitely dead
-            if close <= target:
-                return False  # Closed below target — profit taken
+            if hi >= stop:
+                return False
+            if lo <= target:
+                return False
     return True
 
 
@@ -363,7 +358,12 @@ def _scan_only() -> list:
                 for s in backtest.signals(pr, entry_tf, BIAS_TF, TARGET_R, lookback=lookback):
                     if s.get("age_bars", 999) > max_age:
                         continue
-                    # Calendar-time check: reject signals from stale data
+                    from src.data.fetch import load
+                    try:
+                        df = load(pr, entry_tf)
+                    except Exception:
+                        continue
+                    # Calendar-time check: only when the underlying data is live
                     sig_time = s.get("time")
                     if sig_time is not None:
                         try:
@@ -371,20 +371,21 @@ def _scan_only() -> list:
                                 sig_dt = sig_time.to_pydatetime().replace(tzinfo=None)
                             else:
                                 sig_dt = _dt.datetime.fromisoformat(str(sig_time)[:16])
+                            last_bar = df.index[-1]
+                            if hasattr(last_bar, 'to_pydatetime'):
+                                last_dt = last_bar.to_pydatetime().replace(tzinfo=None)
+                            else:
+                                last_dt = _dt.datetime.fromisoformat(str(last_bar)[:16])
+                            data_age_h = (_now - last_dt).total_seconds() / 3600
                             age_hours = (_now - sig_dt).total_seconds() / 3600
-                            if age_hours > _SIGNAL_MAX_AGE_HOURS:
-                                continue  # data is too stale — skip
+                            tf_hours = {"M30": 0.5, "H1": 1, "H4": 4, "D1": 24}.get(entry_tf, 4)
+                            if data_age_h < tf_hours * 4 and age_hours > _SIGNAL_MAX_AGE_HOURS:
+                                continue
                         except Exception:
                             pass
-                    
-                    # Ensure the signal is still active (hasn't hit SL or TP)
-                    from src.data.fetch import load
-                    try:
-                        df = load(pr, entry_tf)
-                        if not _is_active(s, df):
-                            continue
-                    except Exception:
-                        pass
+
+                    if not _is_active(s, df):
+                        continue
 
                     # --- Multi-TF alignment check (MSNR course rule) ---
                     ltf_map = {"H4": "H1", "H1": "M30"}   # H4 aligns with H1; H1 aligns with M30
@@ -422,8 +423,8 @@ def _scan_only() -> list:
                         pass
                         
                     embargo, news_title = is_news_embargo(pr, s["time"], news_data)
-                    if embargo:
-                        continue # Drop signal due to impending high-impact news
+                    if embargo and _STRICT_SIGNALS:
+                        continue
 
                     fp = get_fingerprint(s["features"])
                     base_conf = _FINGERPRINT_STATS.get(fp, 0.5)
@@ -440,8 +441,9 @@ def _scan_only() -> list:
                     raw_signals.append({k: s[k] for k in (
                         "pair", "direction", "entry", "stop", "target", "rr",
                         "conf", "size", "features", "why", "confluences",
-                        "tf", "time", "age_bars", "tf_aligned", "aligned_tf"
-                    )})
+                        "tf", "time", "age_bars", "tf_aligned", "aligned_tf",
+                        "bar_idx", "tap_bar", "zone_top", "zone_bottom", "zone_kind",
+                    ) if k in s})
             except FileNotFoundError:
                 pass  # pair has no data file yet — skip silently
             except Exception as exc:  # noqa: BLE001
@@ -451,14 +453,16 @@ def _scan_only() -> list:
     raw_signals.sort(key=lambda s: (-int(s.get("tf_aligned", False)), -s.get("conf", 0)))
     
     out = []
-    seen_groups = set()
-    for s in raw_signals:
-        grp_froz = frozenset(_get_group(s["pair"]))
-        if grp_froz in seen_groups:
-            continue # Skip due to correlation
-        seen_groups.add(grp_froz)
-        out.append(s)
-        
+    if _STRICT_SIGNALS:
+        seen_groups = set()
+        for s in raw_signals:
+            grp_froz = frozenset(_get_group(s["pair"]))
+            if grp_froz in seen_groups:
+                continue
+            seen_groups.add(grp_froz)
+            out.append(s)
+    else:
+        out = raw_signals
     return out
 
 _NEWS_CACHE = {"t": 0.0, "data": []}
@@ -467,6 +471,19 @@ def _get_news():
         _NEWS_CACHE["data"] = get_high_impact_news()
         _NEWS_CACHE["t"] = time.time()
     return _NEWS_CACHE["data"]
+
+def _fingerprint_name(fp: str) -> str:
+    """Human label from a pipe-joined fingerprint string."""
+    if "QML" in fp:
+        return "Quasimodo (QML)"
+    if "TurtleSoup" in fp:
+        return "Turtle Soup / SH+BMS+RTO"
+    if "Flipped" in fp:
+        return "SBR/RBS Flip"
+    if "OB_FVG" in fp:
+        return "Order Block / FVG"
+    return "Standard MSNR"
+
 
 def get_fingerprint(feats: dict) -> str:
     parts = []
@@ -547,7 +564,7 @@ def health():
 @app.route("/api/config")
 def api_config():
     from src.notify import telegram_configured
-    return jsonify({"pairs": config.PAIRS, "tf": tf, "bias_tf": BIAS_TF,
+    return jsonify({"pairs": config.PAIRS, "tf": TF, "bias_tf": BIAS_TF,
                     "target_r": TARGET_R, "breakeven": 1 / (1 + TARGET_R),
                     "broker": BROKER, "telegram": telegram_configured(),
                     "seed_state": SEED["state"]})
@@ -582,17 +599,12 @@ def api_journal():
     for t in trades:
         if "why" not in t:
             fp = get_fingerprint(t.get("features", {}))
-            fp_name = "Standard MSNR"
-            if fp == "QML": fp_name = "Quasimodo (QML)"
-            elif fp == "TurtleSoup": fp_name = "Turtle Soup / SH+BMS+RTO"
-            elif fp == "Flipped": fp_name = "SBR/RBS Flip"
-            elif fp == "OB_FVG": fp_name = "Order Block / FVG"
-            t["why"] = f"[{fp_name}] {t.get('direction', '').title()} setup"
+            t["why"] = f"[{_fingerprint_name(fp)}] {t.get('direction', '').title()} setup"
     return jsonify({"rows": trades})
 
 
-def _run_and_cache(refresh: bool) -> dict:
-    """Run one engine tick (scan, trade, learn), cache results for the dashboard."""
+def _run_and_cache_inner(refresh: bool) -> dict:
+    """Core tick logic — caller must hold _live_tick_lock."""
     import datetime as _dt
     # Auto-refresh data if it is more than 4 hours old
     if not refresh:
@@ -607,6 +619,7 @@ def _run_and_cache(refresh: bool) -> dict:
     st = engine.tick(BROKER, TF, BIAS_TF, TARGET_R, refresh=refresh)
     SEED["state"] = "ready"
     _OVERVIEW_CACHE["t"] = 0.0
+    _ANALYSIS_CACHE.clear()
     st["signals"] = sorted(_scan_only(), key=lambda s: -s.get("conf", 0))[:20]
     st["overview"] = _overview()
     st["seed_state"] = SEED["state"]
@@ -615,7 +628,14 @@ def _run_and_cache(refresh: bool) -> dict:
     return st
 
 
+def _run_and_cache(refresh: bool) -> dict:
+    """Run one engine tick (scan, trade, learn), cache results for the dashboard."""
+    with _live_tick_lock:
+        return _run_and_cache_inner(refresh)
+
+
 _manual_tick_lock = threading.Lock()
+_live_tick_lock = threading.Lock()
 
 def _async_manual_tick(refresh: bool):
     if not _manual_tick_lock.acquire(blocking=False):
@@ -682,19 +702,14 @@ def _refresh_pair(pr: str, tfs=None) -> None:
             print(f"  [updater] {pr} {tf} fetch failed: {e}")
 
 
-def _rescan_and_save() -> None:
-    """Re-run the signal scan and save the result so /api/status serves fresh data."""
-    import datetime as _dt
+def _live_tick() -> None:
+    """Run full engine tick: paper trade, learn, journal, refresh dashboard cache."""
     try:
         if not _seeded():
             return
-        sigs = sorted(_scan_only(), key=lambda s: -s.get("conf", 0))[:20]
-        last = _load_last()
-        last["signals"] = sigs
-        last["when"] = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        LAST_TICK.write_text(json.dumps(last, indent=2, default=str))
+        _run_and_cache(refresh=False)
     except Exception as e:  # noqa: BLE001
-        print(f"  [updater] rescan failed: {e}")
+        print(f"  [updater] live tick failed: {e}")
 
 
 def _fast_updater() -> None:
@@ -709,7 +724,7 @@ def _fast_updater() -> None:
     while True:
         for pr in fast:
             _refresh_pair(pr)
-        _rescan_and_save()
+        _live_tick()
         print(f"[fast-updater] tick done ({', '.join(fast)})")
         time.sleep(60)  # Binance/Deriv have no rate limits
 
@@ -735,7 +750,7 @@ def _slow_updater() -> None:
             continue
         pr = slow[idx % len(slow)]
         _refresh_pair(pr)
-        _rescan_and_save()
+        _live_tick()
         print(f"[slow-updater] updated {pr}")
         idx += 1
         # 4 TF calls × 8 s = 32 s minimum; sleep the remainder to avoid bursting
@@ -795,10 +810,12 @@ def api_data():
             else:
                 tfs[tf] = None
         src = _fetch.source_for(pr)
-        live = src in ("binance", "twelvedata")
+        live = src in ("binance", "twelvedata", "deriv", "yfinance")
         rows.append({"pair": pr, "tf": tfs, "source": src, "live": live})
     out = {"pairs": rows, "timeframes": list(config.TIMEFRAMES),
-           "ladder": "D1->H4->H1->M30", "source": "yfinance", "seed_state": SEED["state"]}
+           "ladder": "D1->H4->H1->M30",
+           "source": "binance/deriv live + yfinance/twelvedata forex",
+           "seed_state": SEED["state"]}
     _DATA_CACHE.update(t=time.time(), data=out)
     return jsonify(out)
 
@@ -858,7 +875,7 @@ def api_backtest():
             results.append(row)
         except Exception as e:  # noqa: BLE001
             results.append({"pair": pr, "error": str(e)})
-    return jsonify({"results": results, "tf": tf, "bias_tf": BIAS_TF, "target_r": TARGET_R})
+    return jsonify({"results": results, "tf": TF, "bias_tf": BIAS_TF, "target_r": TARGET_R})
 
 
 _ANALYSIS_CACHE = {}
@@ -908,16 +925,17 @@ def api_analysis():
 @app.route("/api/chart")
 def api_chart():
     """Server-rendered annotated chart PNG (SNR zones + structure + rejections).
-    
-    Auto-fetches missing data if not yet downloaded. Always returns a PNG
-    (error message drawn on the image if something goes wrong).
+
+    Auto-fetches missing or stale data. Signal charts center on the setup bar and
+    draw the exact SNR zone + confluence labels from the analysed signal.
     """
+    import datetime as _dt
+
     pair = request.args.get("pair", config.PAIRS[0])
     tf = request.args.get("tf", TF)
     if pair not in config.PAIRS or tf not in config.TIMEFRAMES:
         return ("bad params", 400)
-    
-    # Auto-fetch if the parquet file doesn't exist yet
+
     data_path = config.DATA_DIR / f"{pair}_{tf}.parquet"
     if not data_path.exists():
         try:
@@ -925,23 +943,44 @@ def api_chart():
             fetch.save(pair, tf)
             print(f"[api_chart] auto-fetched {pair} {tf}")
         except Exception as e:  # noqa: BLE001
-            # Return an informative placeholder PNG
             return _chart_placeholder(pair, tf, f"Fetching data… ({e})")
-    
+    else:
+        # Refresh if the last bar is older than ~2× the candle period
+        tf_hours = {"M30": 0.5, "H1": 1, "H4": 4, "D1": 24}.get(tf, 4)
+        try:
+            import pandas as pd
+            last_ts = pd.read_parquet(data_path, columns=["close"]).index.max()
+            age_h = (_dt.datetime.utcnow() - pd.Timestamp(last_ts).to_pydatetime()).total_seconds() / 3600
+            if age_h > tf_hours * 2.5:
+                from src.data import fetch
+                fetch.save(pair, tf)
+                _ANALYSIS_CACHE.clear()
+                print(f"[api_chart] refreshed stale {pair} {tf} ({age_h:.1f}h old)")
+        except Exception:  # noqa: BLE001
+            pass
+
     try:
         from src.viz.plot_chart import plot
-        # Optional signal overlay params
         entry = request.args.get("entry", type=float)
         stop_p = request.args.get("stop", type=float)
         target = request.args.get("target", type=float)
         direction = request.args.get("dir", default=None)
-        
-        # Zoom in (70 bars) if showing a specific signal, otherwise show full context (140 bars)
-        n_bars = 70 if entry is not None else 140
-        
-        path = plot(pair, tf, bars=n_bars, left=3, right=3,
-                    entry=entry, stop=stop_p, target=target, direction=direction)
-        return send_file(path, mimetype="image/png")
+        signal_bar = request.args.get("bar", type=int)
+        zone_top = request.args.get("zt", type=float)
+        zone_bottom = request.args.get("zb", type=float)
+        zone_kind = request.args.get("zk", default=None)
+        notes = request.args.get("notes", default="")
+
+        has_signal = entry is not None and stop_p is not None and target is not None
+        n_bars = 80 if has_signal else 140
+
+        path = plot(
+            pair, tf, bars=n_bars, left=3, right=3,
+            entry=entry, stop=stop_p, target=target, direction=direction,
+            signal_bar=signal_bar, zone_top=zone_top, zone_bottom=zone_bottom,
+            zone_kind=zone_kind, confluences=notes.split("|") if notes else None,
+        )
+        return send_file(path, mimetype="image/png", max_age=0)
     except FileNotFoundError:
         return _chart_placeholder(pair, tf, "No data yet — click Refresh + tick")
     except Exception as e:  # noqa: BLE001

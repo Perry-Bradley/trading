@@ -18,7 +18,7 @@ export default function Journal() {
     setJr(j.rows || []);
     if (s) setSt(s);
   }, []);
-  useLive(load);
+  useLive(load, 15000);
 
   const tr = st?.track_record;
 

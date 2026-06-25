@@ -41,6 +41,13 @@ export type Signal = {
   why?: string;
   confluences?: string[];
   features?: Record<string, any>;
+  bar_idx?: number;
+  tap_bar?: number;
+  zone_top?: number;
+  zone_bottom?: number;
+  zone_kind?: string;
+  tf_aligned?: boolean;
+  aligned_tf?: string;
 };
 
 export type Position = {

@@ -472,6 +472,8 @@ def signals(pair: str, tf: str = "H4", bias_tf: str = "D1", target_r: float = 2.
             out.append({
                 "pair": pair, "tf": tf, "bias_tf": bias_tf,
                 "time": df.index[i], "age_bars": (n - 1) - i,
+                "bar_idx": i, "tap_bar": tap_i,
+                "zone_top": z.top, "zone_bottom": z.bottom, "zone_kind": z.kind,
                 "direction": "long" if b > 0 else "short",
                 "entry": entry, "stop": stop, "target": target, "rr": round(dynamic_rr, 2),
                 "features": feats,

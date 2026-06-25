@@ -66,10 +66,10 @@ def source_for(pair: str) -> str:
     """Which live source handles this pair (for display / docs)."""
     if pair in config.CRYPTO:
         return "binance"
-    elif pair == "V100" or pair == "V25":
+    if pair in ("V100", "V25"):
         return "deriv"
-    else:
-        return "twelvedata"
+    from src.data.sources import twelvedata
+    return "twelvedata" if twelvedata.available() else "yfinance"
 
 
 def fetch(pair: str, timeframe: str) -> pd.DataFrame:
@@ -92,7 +92,13 @@ def fetch(pair: str, timeframe: str) -> pd.DataFrame:
         return _sanitize(deriv_data.fetch_ohlcv(pair, timeframe))
     else:
         from src.data.sources import twelvedata
-        return _sanitize(twelvedata.fetch_ohlcv(pair, timeframe))
+        try:
+            if twelvedata.available():
+                return _sanitize(twelvedata.fetch_ohlcv(pair, timeframe))
+        except Exception as e:  # noqa: BLE001
+            print(f"    (twelvedata {pair} {timeframe} failed: {e} — trying yfinance)")
+        from src.data.sources import yfinance_src
+        return _sanitize(yfinance_src.fetch_ohlcv(pair, timeframe))
 
 
 def save(pair: str, timeframe: str) -> pd.DataFrame:
