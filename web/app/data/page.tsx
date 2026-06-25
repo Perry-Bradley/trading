@@ -20,6 +20,35 @@ export default function DataPage() {
         detectors, backtester and model all read from.
       </p>
 
+      {d?.twelvedata && (
+        <Section title="TwelveData API keys" right={
+          <span className={`text-xs font-medium ${d.twelvedata.active > 0 ? "text-up" : "text-down"}`}>
+            {d.twelvedata.active}/{d.twelvedata.configured} active
+          </span>
+        }>
+          <p className="text-sub text-sm mb-3">
+            Forex uses TwelveData REST (800 credits/day per free key). Add fallbacks on the API service:
+            {" "}<code className="bg-canvas px-1 rounded text-xs">TWELVEDATA_KEYS=key2,key3,key4,key5</code>
+            {" "}or <code className="bg-canvas px-1 rounded text-xs">TWELVEDATA_KEY_2</code> … <code className="bg-canvas px-1 rounded text-xs">_5</code>.
+            Keys rotate automatically when one hits daily or per-minute limits.
+          </p>
+          {d.twelvedata.active === 0 && (
+            <p className="text-down text-sm mb-2">All keys exhausted — dashboard forex data will freeze until UTC midnight or you add a fresh key.</p>
+          )}
+          <ul className="text-sm space-y-1.5">
+            {d.twelvedata.keys.map((k) => (
+              <li key={k.id} className="flex items-center justify-between py-1 border-b border-line/50">
+                <span className="font-mono text-xs">{k.id}</span>
+                <span className={k.active ? "text-up text-xs" : "text-down text-xs"}>
+                  {k.active ? `${k.ok} ok` : k.cooldown_until ? `cooldown ${k.cooldown_until}` : "exhausted"}
+                  {k.last_error && !k.active && <span className="text-sub ml-2 truncate max-w-[200px] inline-block align-bottom">{k.last_error}</span>}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
+
       {d && d.pairs.some((p) => !p.live) && (
         <div className="p-3 rounded-xl bg-warn/5 border border-warn/30 text-warn text-sm">
           Forex needs <code className="bg-canvas px-1 rounded">TWELVEDATA_KEY</code> on the API service.

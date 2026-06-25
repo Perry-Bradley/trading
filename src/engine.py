@@ -35,7 +35,10 @@ def tick(broker_kind: str = "paper", tf: str = "H4", bias_tf: str = "D1",
         for pr in config.PAIRS:
             for t in {"H4", "H1", "M30", tf, bias_tf}:
                 try:
-                    fetch.save(pr, t)
+                    if refresh:
+                        fetch.save_if_stale(pr, t)
+                    elif not (config.DATA_DIR / f"{pr}_{t}.parquet").exists():
+                        fetch.save(pr, t)
                 except Exception as e:  # noqa: BLE001
                     print(f"  (fetch {pr} {t} failed: {e})")
 

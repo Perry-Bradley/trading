@@ -100,6 +100,12 @@ export type DataInfo = {
   ladder: string;
   source: string;
   seed_state?: string;
+  twelvedata?: {
+    configured: number;
+    active: number;
+    exhausted: number;
+    keys: { id: string; active: boolean; ok: number; fail: number; last_error?: string | null; cooldown_until?: string | null }[];
+  };
 };
 
 export type BacktestRow = {

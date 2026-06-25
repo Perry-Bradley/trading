@@ -77,6 +77,28 @@ def save(pair: str, timeframe: str) -> pd.DataFrame:
     return df
 
 
+_TF_STALE_HOURS = {"M30": 0.5, "H1": 1.0, "H4": 4.0, "D1": 24.0}
+
+
+def save_if_stale(pair: str, timeframe: str, margin: float = 1.5) -> bool:
+    """Fetch and save only when parquet is missing or older than the bar period. Returns True if fetched."""
+    path = config.DATA_DIR / f"{pair}_{timeframe}.parquet"
+    tf_h = _TF_STALE_HOURS.get(timeframe, 4.0)
+    if path.exists():
+        try:
+            last = pd.read_parquet(path, columns=["close"]).index.max()
+            last_ts = pd.Timestamp(last)
+            if last_ts.tzinfo is not None:
+                last_ts = last_ts.tz_convert("UTC").tz_localize(None)
+            age_h = (pd.Timestamp.utcnow() - last_ts).total_seconds() / 3600
+            if age_h < tf_h * margin:
+                return False
+        except Exception:  # noqa: BLE001
+            pass
+    save(pair, timeframe)
+    return True
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Fetch OHLCV from live sources.")
     p.add_argument("--pair", choices=list(config.PAIRS), help="Single pair to fetch.")

@@ -693,12 +693,12 @@ def _get_live_groups():
 
 
 def _refresh_pair(pr: str, tfs=None) -> None:
-    """Download fresh data for one pair across all entry timeframes."""
+    """Download fresh data for one pair — skip TFs that are still current."""
     from src.data import fetch
     tfs = tfs or ["H4", "H1", "M30", BIAS_TF]
     for tf in set(tfs):
         try:
-            fetch.save(pr, tf)
+            fetch.save_if_stale(pr, tf)
         except Exception as e:  # noqa: BLE001
             print(f"  [updater] {pr} {tf} fetch failed: {e}")
 
@@ -748,17 +748,23 @@ def _slow_updater() -> None:
     _, slow = _get_live_groups()
     print(f"[slow-updater] forex pairs: {slow} — cycling at 8 req/min (TwelveData)")
     idx = 0
+    tf_cycle = ["M30", "H1", "H4", BIAS_TF]
     while True:
         if not slow:
             time.sleep(60)
             _, slow = _get_live_groups()  # re-check in case config changed
             continue
         pr = slow[idx % len(slow)]
-        _refresh_pair(pr)
+        # One TF per cycle to conserve API credits (full refresh over ~16 min)
+        tf = tf_cycle[(idx // len(slow)) % len(tf_cycle)]
+        from src.data import fetch
+        try:
+            fetch.save_if_stale(pr, tf)
+        except Exception as e:  # noqa: BLE001
+            print(f"  [updater] {pr} {tf} fetch failed: {e}")
         _live_tick()
-        print(f"[slow-updater] updated {pr}")
+        print(f"[slow-updater] updated {pr} {tf}")
         idx += 1
-        # 4 TF calls × 8 s = 32 s minimum; sleep the remainder to avoid bursting
         time.sleep(max(32, 8 * 4))
 
 
@@ -822,6 +828,11 @@ def api_data():
            "ladder": "D1->H4->H1->M30",
            "source": "binance (crypto) · twelvedata (forex) · deriv (V100/V25)",
            "seed_state": SEED["state"]}
+    try:
+        from src.data.sources import twelvedata as _td
+        out["twelvedata"] = _td.pool_status()
+    except Exception:  # noqa: BLE001
+        out["twelvedata"] = None
     _DATA_CACHE.update(t=time.time(), data=out)
     return jsonify(out)
 
@@ -906,11 +917,11 @@ def api_analysis():
             age_h = (_dt.datetime.utcnow() - pd.Timestamp(last_ts).to_pydatetime()).total_seconds() / 3600
             if age_h > tf_hours * 1.2:
                 from src.data import fetch
-                fetch.save(pair, tf)
+                fetch.save_if_stale(pair, tf)
                 _ANALYSIS_CACHE.clear()
         elif _seeded():
             from src.data import fetch
-            fetch.save(pair, tf)
+            fetch.save_if_stale(pair, tf)
     except Exception:  # noqa: BLE001
         pass
     c = _ANALYSIS_CACHE.get(f"{pair}_{tf}")
@@ -982,7 +993,7 @@ def api_chart():
             age_h = (_dt.datetime.utcnow() - pd.Timestamp(last_ts).to_pydatetime()).total_seconds() / 3600
             if age_h > tf_hours * 1.2:
                 from src.data import fetch
-                fetch.save(pair, tf)
+                fetch.save_if_stale(pair, tf)
                 _ANALYSIS_CACHE.clear()
                 print(f"[api_chart] refreshed stale {pair} {tf} ({age_h:.1f}h old)")
         except Exception:  # noqa: BLE001
@@ -1044,8 +1055,8 @@ _start_scheduler()   # begin autonomous ticking (set TICK_INTERVAL=0 to disable)
 # Log data-source status at boot (helps Railway debugging — never prints the key).
 try:
     from src.data.sources import twelvedata as _td
-    _td_ok = _td.available()
-    print(f"[boot] data sources: binance=BTCUSD | deriv=V100,V25 | twelvedata={'ON' if _td_ok else 'OFF (set TWELVEDATA_KEY)'}")
+    _ps = _td.pool_status()
+    print(f"[boot] data sources: binance=BTCUSD | deriv=V100,V25 | twelvedata={_ps['active']}/{_ps['configured']} keys active")
     print(f"[boot] DATA_DIR={config.DATA_DIR}")
 except Exception as _e:  # noqa: BLE001
     print(f"[boot] source check failed: {_e}")
