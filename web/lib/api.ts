@@ -1,5 +1,5 @@
 import type {
-  Config, Status, Signal, JournalRow, PairOverview, ModelInfo, DataInfo, BacktestRow, Analysis,
+  Config, Status, Signal, JournalResponse, PairOverview, ModelInfo, DataInfo, BacktestRow, Analysis,
 } from "./types";
 
 /** Same-origin → Next.js proxy → Python API. Works on Railway with runtime API_URL. */
@@ -20,7 +20,7 @@ export const api = {
   status: () => j<Status & { seed_state?: string }>("/api/status"),
   signals: () => j<{ signals: Signal[]; seed_state?: string }>("/api/signals"),
   overview: () => j<{ overview: PairOverview[]; seed_state?: string }>("/api/overview"),
-  journal: (n = 60) => j<{ rows: JournalRow[]; count?: number; entries?: number; closes?: number; last_ts?: string | null }>(`/api/journal?n=${n}`),
+  journal: (n = 60) => j<JournalResponse>(`/api/journal?n=${n}`),
   model: () => j<ModelInfo>("/api/model"),
   data: () => j<DataInfo>("/api/data"),
   analysis: (pair: string, tf?: string) => j<Analysis>(`/api/analysis?pair=${pair}${tf ? `&tf=${tf}` : ""}`),

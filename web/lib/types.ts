@@ -141,3 +141,11 @@ export type JournalRow = {
   pnl: string;
   nav: string;
 };
+
+export type JournalResponse = {
+  rows: JournalRow[];
+  count?: number;
+  entries?: number;
+  closes?: number;
+  last_ts?: string | null;
+};

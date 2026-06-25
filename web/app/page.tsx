@@ -4,7 +4,7 @@ import { useCallback, useState } from "react";
 import Link from "next/link";
 import { api } from "@/lib/api";
 import { useLive, fmtPrice } from "@/lib/useLive";
-import type { Config, Status, Signal, JournalRow, PairOverview } from "@/lib/types";
+import type { Config, Status, Signal, JournalRow, JournalResponse, PairOverview } from "@/lib/types";
 import { StatCard, DirBadge, Section } from "@/components/ui";
 
 const money = (v: number) => v.toLocaleString(undefined, { maximumFractionDigits: 2 });
@@ -21,7 +21,7 @@ export default function Overview() {
     const [c, s, sg, o, j] = await Promise.all([
       api.config().catch(() => null), api.status().catch(() => null),
       api.signals().catch(() => ({ signals: [] })), api.overview().catch(() => ({ overview: [] })),
-      api.journal(12).catch(() => ({ rows: [] })),
+      api.journal(12).catch(() => ({ rows: [] } as JournalResponse)),
     ]);
     if (c) setCfg(c); if (s) setSt(s);
     setSigs(sg.signals || []); setOv(o.overview || []);
