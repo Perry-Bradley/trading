@@ -9,10 +9,8 @@ import { LiveChart } from "@/components/LiveChart";
 
 function StatusBadge({ s }: { s: Signal }) {
   const map: Record<string, { t: string; c: string }> = {
-    live: { t: "● LIVE", c: "bg-up/15 text-up" },
-    open: { t: "OPEN", c: "bg-brand/10 text-brand" },
-    won: { t: "WON ✓", c: "bg-up/15 text-up" },
-    lost: { t: "LOST ✕", c: "bg-down/15 text-down" },
+    live: { t: "● FRESH — take now", c: "bg-up/15 text-up" },
+    open: { t: "STILL VALID", c: "bg-brand/10 text-brand" },
   };
   const m = map[s.status || "open"] || map.open;
   return <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${m.c}`}>{m.t}</span>;
@@ -93,8 +91,7 @@ function SignalCard({
           <LiveChart pair={s.pair} tf={s.tf || "H4"} signal={s} annotate />
           <p className="text-sub text-[11px] mt-2">
             Bold lines = Entry/SL/TP · yellow dashed = tapped POI · green/red dashed = OB/BB/SNR/FVG ·
-            markers = CHoCH/BOS · sweeps · QM. {s.status === "won" && "This prediction hit target ✓"}
-            {s.status === "lost" && "This prediction hit stop ✕"}
+            markers = CHoCH/BOS · sweeps · QM.
           </p>
         </Section>
       )}
@@ -122,47 +119,41 @@ export default function Signals() {
   useLive(load, 15000);
 
   const be = cfg?.breakeven ?? 0.333;
-  const active = recent.filter((s) => s.status === "live" || s.status === "open");
-  const resolved = recent.filter((s) => s.status === "won" || s.status === "lost");
-  const wins = resolved.filter((s) => s.status === "won").length;
+  // Takeable = still-running setups (not yet hit SL/TP). Fresh ones first, then by confidence.
+  const rank = (s: Signal) => (s.status === "live" ? 0 : 1);
+  const takeable = recent
+    .filter((s) => s.status === "live" || s.status === "open")
+    .sort((a, b) => rank(a) - rank(b) || (b.conf ?? 0) - (a.conf ?? 0));
 
   return (
     <div className="space-y-4">
       <div className="flex items-end justify-between">
-        <h1 className="text-xl font-bold">Signals — predictions & outcomes</h1>
-        <span className="text-sub text-sm">{active.length} active · {resolved.length} resolved</span>
+        <h1 className="text-xl font-bold">Signals — setups you can take</h1>
+        <span className="text-sub text-sm">{takeable.length} valid setup{takeable.length === 1 ? "" : "s"}</span>
       </div>
       <p className="text-sub text-sm">
-        A signal is a prediction (entry · SL · TP with its “why”). <b className="text-ink">Active</b> = still
-        running; <b className="text-ink">resolved</b> = already hit target or stop — that’s what the journal records.
+        Every card is a setup that still aligns with the rules (HTF bias · POI tap · trigger · confluences) and
+        has <b className="text-ink">not</b> hit its stop or target yet — so it’s still actionable. Each shows
+        entry · SL · TP, the “why”, confidence and R:R, with the annotated chart to confirm.
+        Outcomes of past setups live in the <b className="text-ink">Journal</b>.
         {seed === "warming" && " (Still warming up — give it a moment.)"}
       </p>
 
-      <Section title={`Active now (${active.length})`}>
-        {active.length === 0 ? (
+      {takeable.length === 0 ? (
+        <Section title="No valid setups right now">
           <p className="text-sub text-sm py-2">
-            No running predictions this moment — MSNR is low-frequency. Resolved ones are below, and the paper
-            engine keeps testing every setup in the background.
+            Nothing currently meets the rules across the 7 pairs — MSNR is deliberately selective, so dry spells
+            are normal. The paper engine keeps testing every setup in the background; check the
+            <b className="text-ink"> Journal</b> to see how those resolved.
           </p>
-        ) : (
-          <div className="space-y-4">
-            {active.map((s, i) => {
-              const id = `a-${s.pair}-${s.tf}-${s.time}-${i}`;
-              return <SignalCard key={id} s={s} open={openId === id} onToggle={() => setOpenId(openId === id ? null : id)} be={be} bust={bust} />;
-            })}
-          </div>
-        )}
-      </Section>
-
-      {resolved.length > 0 && (
-        <Section title={`Recently resolved (${resolved.length}) — ${wins} won / ${resolved.length - wins} lost`}>
-          <div className="space-y-4">
-            {resolved.map((s, i) => {
-              const id = `r-${s.pair}-${s.tf}-${s.time}-${i}`;
-              return <SignalCard key={id} s={s} open={openId === id} onToggle={() => setOpenId(openId === id ? null : id)} be={be} bust={bust} />;
-            })}
-          </div>
         </Section>
+      ) : (
+        <div className="space-y-4">
+          {takeable.map((s, i) => {
+            const id = `${s.pair}-${s.tf}-${s.time}-${i}`;
+            return <SignalCard key={id} s={s} open={openId === id} onToggle={() => setOpenId(openId === id ? null : id)} be={be} bust={bust} />;
+          })}
+        </div>
       )}
     </div>
   );
