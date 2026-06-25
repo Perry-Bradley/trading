@@ -1,8 +1,6 @@
-"""Twelve Data market-data source (forex) — real-time-ish with a free API key.
+"""Twelve Data market-data source (forex + gold) — live with API key.
 
-Set TWELVEDATA_KEY to enable. Free tier is rate-limited (~8 req/min, 800/day),
-which is fine for our low-frequency scanning. If the key is missing or a request
-fails (e.g. rate limit), the caller falls back to yfinance.
+Set TWELVEDATA_KEY on Railway (or TWELVE_DATA_API_KEY). Free tier: ~8 req/min.
 """
 from __future__ import annotations
 
@@ -14,10 +12,19 @@ import requests
 
 INTERVAL = {"D1": "1day", "H4": "4h", "H1": "1h", "M30": "30min"}
 
-# Free tier allows ~8 requests/min; keep >=8s between calls so a full seed of all
-# forex pairs succeeds instead of getting rate-limited (429) and falling back.
+# Free tier allows ~8 requests/min; keep >=8s between calls.
 _MIN_SPACING = 8.0
 _last_call = [0.0]
+
+_KEY_NAMES = ("TWELVEDATA_KEY", "TWELVE_DATA_API_KEY", "TWELVE_DATA_KEY", "TWELVEDATA_API_KEY")
+
+
+def api_key() -> str:
+    for name in _KEY_NAMES:
+        v = (os.environ.get(name) or "").strip()
+        if v:
+            return v
+    return ""
 
 
 def _throttle() -> None:
@@ -28,17 +35,21 @@ def _throttle() -> None:
 
 
 def available() -> bool:
-    return bool(os.environ.get("TWELVEDATA_KEY"))
+    return bool(api_key())
 
 
 def _symbol(pair: str) -> str:
+    if pair == "XAUUSD":
+        return "XAU/USD"
     return f"{pair[:3]}/{pair[3:]}"
 
 
 def fetch_ohlcv(pair: str, tf: str, outputsize: int = 5000) -> pd.DataFrame:
-    key = os.environ.get("TWELVEDATA_KEY")
+    key = api_key()
     if not key:
-        raise RuntimeError("TWELVEDATA_KEY not set")
+        raise RuntimeError(
+            "TWELVEDATA_KEY not set — add it to Railway variables for live forex data"
+        )
     url = ("https://api.twelvedata.com/time_series"
            f"?symbol={_symbol(pair)}&interval={INTERVAL[tf]}"
            f"&outputsize={outputsize}&apikey={key}&format=JSON")
@@ -53,7 +64,7 @@ def fetch_ohlcv(pair: str, tf: str, outputsize: int = 5000) -> pd.DataFrame:
     if "volume" in df.columns:
         df["volume"] = pd.to_numeric(df["volume"], errors="coerce").fillna(0.0)
     else:
-        df["volume"] = 0.0          # forex has no volume from Twelve Data
+        df["volume"] = 0.0
     df = df.set_index("time")[["open", "high", "low", "close", "volume"]].sort_index()
     df.index.name = "time"
     return df

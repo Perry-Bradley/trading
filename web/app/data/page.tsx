@@ -16,15 +16,14 @@ export default function DataPage() {
       <h1 className="text-xl font-bold">Data pipeline</h1>
       <p className="text-sub text-sm">
         OHLCV for every pair across the MSNR ladder <b>{d?.ladder || "D1→H4→H1→M30"}</b>, fetched from{" "}
-        <b>{d?.source || "yfinance"}</b>, sanitised for OHLC integrity, then resampled (H4) — the foundation the
+        <b>{d?.source || "live sources"}</b>, sanitised for OHLC integrity — the foundation the
         detectors, backtester and model all read from.
       </p>
 
       {d && d.pairs.some((p) => !p.live) && (
         <div className="p-3 rounded-xl bg-warn/5 border border-warn/30 text-warn text-sm">
-          Forex pairs show <b>yfinance (delayed ~15 min)</b> because no Twelve Data key is set.
-          For <b>live forex</b>: grab a free key at twelvedata.com, then set <code className="bg-canvas px-1 rounded">TWELVEDATA_KEY</code>
-          on the API service and redeploy. Crypto (Binance) is already live, no key needed.
+          Forex needs <code className="bg-canvas px-1 rounded">TWELVEDATA_KEY</code> on the API service.
+          Crypto uses Binance; V100/V25 use Deriv — both live with no extra key.
         </div>
       )}
       <Section title="Coverage" right={<span className="text-sub text-xs">{d?.pairs.length ?? 0} pairs · {d?.timeframes.length ?? 0} timeframes</span>}>

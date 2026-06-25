@@ -810,11 +810,11 @@ def api_data():
             else:
                 tfs[tf] = None
         src = _fetch.source_for(pr)
-        live = src in ("binance", "twelvedata", "deriv", "yfinance")
+        live = src in ("binance", "twelvedata", "deriv")
         rows.append({"pair": pr, "tf": tfs, "source": src, "live": live})
     out = {"pairs": rows, "timeframes": list(config.TIMEFRAMES),
            "ladder": "D1->H4->H1->M30",
-           "source": "binance/deriv live + yfinance/twelvedata forex",
+           "source": "binance (crypto) · twelvedata (forex) · deriv (V100/V25)",
            "seed_state": SEED["state"]}
     _DATA_CACHE.update(t=time.time(), data=out)
     return jsonify(out)
@@ -1011,6 +1011,15 @@ def _chart_placeholder(pair: str, tf: str, msg: str):
 
 
 _start_scheduler()   # begin autonomous ticking (set TICK_INTERVAL=0 to disable)
+
+# Log data-source status at boot (helps Railway debugging — never prints the key).
+try:
+    from src.data.sources import twelvedata as _td
+    _td_ok = _td.available()
+    print(f"[boot] data sources: binance=BTCUSD | deriv=V100,V25 | twelvedata={'ON' if _td_ok else 'OFF (set TWELVEDATA_KEY)'}")
+    print(f"[boot] DATA_DIR={config.DATA_DIR}")
+except Exception as _e:  # noqa: BLE001
+    print(f"[boot] source check failed: {_e}")
 
 
 if __name__ == "__main__":

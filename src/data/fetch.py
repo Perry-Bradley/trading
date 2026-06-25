@@ -1,11 +1,11 @@
-"""Download historical forex OHLCV data via yfinance.
+"""Download and cache OHLCV from live sources.
 
-Usage:
-    python -m src.data.fetch --pair EURUSD --timeframe D1
-    python -m src.data.fetch --all          # every pair, every timeframe
+Routing:
+  BTCUSD     -> Binance (real-time, no key)
+  V100, V25  -> Deriv WebSocket
+  Forex/XAU  -> Twelve Data (requires TWELVEDATA_KEY)
 
-Data is saved as parquet under data/<PAIR>_<TIMEFRAME>.parquet with a tz-naive
-DatetimeIndex and columns: open, high, low, close, volume.
+Data is saved as parquet under data/<PAIR>_<TIMEFRAME>.parquet.
 """
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ import argparse
 import sys
 
 import pandas as pd
-
 
 import config
 
@@ -28,28 +27,8 @@ def load(pair: str, timeframe: str) -> pd.DataFrame:
     return pd.read_parquet(path)
 
 
-def _flatten(df: pd.DataFrame) -> pd.DataFrame:
-    """Normalise a yfinance frame to lowercase OHLCV with a clean index."""
-    # yfinance returns a MultiIndex column frame when given a single ticker too.
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-    df = df.rename(columns=str.lower)
-    keep = [c for c in ("open", "high", "low", "close", "volume") if c in df.columns]
-    df = df[keep].copy()
-    df.index = pd.to_datetime(df.index)
-    if df.index.tz is not None:
-        df.index = df.index.tz_localize(None)
-    df.index.name = "time"
-    return df.dropna(subset=["open", "high", "low", "close"])
-
-
 def _sanitize(df: pd.DataFrame) -> pd.DataFrame:
-    """Enforce OHLC integrity: high must contain open/close, low likewise.
-
-    Yahoo's forex feed occasionally returns a high/low that doesn't bracket the
-    open/close (mostly sub-pip rounding, but rarely a badly wrong bar). We clamp
-    rather than drop so the time series stays continuous. Returns a copy.
-    """
+    """Enforce OHLC integrity on incoming bars."""
     df = df.copy()
     hi_need = df[["open", "close"]].max(axis=1)
     lo_need = df[["open", "close"]].min(axis=1)
@@ -63,22 +42,16 @@ def _sanitize(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def source_for(pair: str) -> str:
-    """Which live source handles this pair (for display / docs)."""
+    """Which live source handles this pair."""
     if pair in config.CRYPTO:
         return "binance"
     if pair in ("V100", "V25"):
         return "deriv"
-    from src.data.sources import twelvedata
-    return "twelvedata" if twelvedata.available() else "yfinance"
+    return "twelvedata"
 
 
 def fetch(pair: str, timeframe: str) -> pd.DataFrame:
-    """Route to the best available source.
-
-    crypto  -> Binance (real-time, no key)
-    v100/v25 -> Deriv API
-    forex/idx -> Twelve Data
-    """
+    """Route to the live source for this instrument. No yfinance fallback."""
     if pair not in config.PAIRS:
         raise ValueError(f"Unknown pair {pair!r}. Known: {list(config.PAIRS)}")
     if timeframe not in config.TIMEFRAMES:
@@ -87,18 +60,12 @@ def fetch(pair: str, timeframe: str) -> pd.DataFrame:
     if pair in config.CRYPTO:
         from src.data.sources import binance
         return _sanitize(binance.fetch_ohlcv(pair, timeframe))
-    elif pair == "V100" or pair == "V25":
+    if pair in ("V100", "V25"):
         from src.data.sources import deriv_data
         return _sanitize(deriv_data.fetch_ohlcv(pair, timeframe))
-    else:
-        from src.data.sources import twelvedata
-        try:
-            if twelvedata.available():
-                return _sanitize(twelvedata.fetch_ohlcv(pair, timeframe))
-        except Exception as e:  # noqa: BLE001
-            print(f"    (twelvedata {pair} {timeframe} failed: {e} — trying yfinance)")
-        from src.data.sources import yfinance_src
-        return _sanitize(yfinance_src.fetch_ohlcv(pair, timeframe))
+
+    from src.data.sources import twelvedata
+    return _sanitize(twelvedata.fetch_ohlcv(pair, timeframe))
 
 
 def save(pair: str, timeframe: str) -> pd.DataFrame:
@@ -111,7 +78,7 @@ def save(pair: str, timeframe: str) -> pd.DataFrame:
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description="Fetch forex OHLCV data.")
+    p = argparse.ArgumentParser(description="Fetch OHLCV from live sources.")
     p.add_argument("--pair", choices=list(config.PAIRS), help="Single pair to fetch.")
     p.add_argument("--timeframe", choices=list(config.TIMEFRAMES), help="Single timeframe.")
     p.add_argument("--all", action="store_true", help="Fetch every pair and timeframe.")
@@ -132,7 +99,7 @@ def main(argv: list[str] | None = None) -> int:
         for tf in tfs:
             try:
                 save(pair, tf)
-            except Exception as e:  # noqa: BLE001 - report and continue
+            except Exception as e:  # noqa: BLE001
                 failures += 1
                 print(f"  FAILED {pair} {tf}: {e}")
     print("Done." + (f" {failures} failure(s)." if failures else ""))

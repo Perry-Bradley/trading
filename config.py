@@ -1,10 +1,12 @@
 """Central configuration for the MSNR trading assistant."""
+import os
 from pathlib import Path
 
 # --- Paths -------------------------------------------------------------------
 ROOT = Path(__file__).resolve().parent
-DATA_DIR = ROOT / "data"
-DATA_DIR.mkdir(exist_ok=True)
+# Railway: mount persistent volume at /data and set DATA_DIR=/data
+DATA_DIR = Path(os.environ.get("DATA_DIR", str(ROOT / "data")))
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # Models live UNDER data/ so a single persistent volume (mounted at data/) keeps
 # the learned model alongside price data, the paper account and the journal.
