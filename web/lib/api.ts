@@ -2,7 +2,11 @@ import type {
   Config, Status, Signal, JournalRow, PairOverview, ModelInfo, DataInfo, BacktestRow, Analysis,
 } from "./types";
 
-const BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+/** Same-origin → Next.js proxy → Python API. Works on Railway with runtime API_URL. */
+const BASE =
+  typeof window !== "undefined"
+    ? ""
+    : process.env.API_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 async function j<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { cache: "no-store", ...init });

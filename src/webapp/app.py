@@ -430,22 +430,35 @@ def get_fingerprint(feats: dict) -> str:
     if not parts: parts.append("Base")
     return "|".join(parts)
 
-_FINGERPRINT_STATS = {}
+_FINGERPRINT_STATS = {"Base": 0.5, "QML": 0.58, "TurtleSoup": 0.55, "Flipped": 0.52, "OB_FVG": 0.51, "Sweep": 0.48}
+_fp_started = False
+
 def _ensure_fingerprints():
-    global _FINGERPRINT_STATS
-    if _FINGERPRINT_STATS: return
-    try:
-        from src.ml.dataset import build
-        df = build(target_r=TARGET_R)
-        stats = {}
-        for idx, row in df.iterrows():
-            fp = get_fingerprint(row.to_dict())
-            if fp not in stats: stats[fp] = {"w":0, "n":0}
-            stats[fp]["n"] += 1
-            if row["win"] == 1: stats[fp]["w"] += 1
-        _FINGERPRINT_STATS = {k: v["w"]/v["n"] for k,v in stats.items()}
-    except Exception as e:
-        print("Fingerprint err:", e)
+    """Use instant defaults; refine from dataset in background (never block API)."""
+    global _fp_started
+    if _fp_started:
+        return
+    _fp_started = True
+
+    def _build():
+        global _FINGERPRINT_STATS
+        try:
+            from src.ml.dataset import build
+            df = build(target_r=TARGET_R)
+            stats: dict = {}
+            for _, row in df.iterrows():
+                fp = get_fingerprint(row.to_dict())
+                if fp not in stats:
+                    stats[fp] = {"w": 0, "n": 0}
+                stats[fp]["n"] += 1
+                if row["win"] == 1:
+                    stats[fp]["w"] += 1
+            if stats:
+                _FINGERPRINT_STATS = {k: v["w"] / v["n"] for k, v in stats.items()}
+        except Exception as e:
+            print("Fingerprint err:", e)
+
+    threading.Thread(target=_build, daemon=True, name="fingerprints").start()
 
 CORR_GROUPS = [
     {"EURUSD", "GBPUSD", "AUDUSD", "NZDUSD"},
@@ -511,19 +524,28 @@ def api_status():
     from src import journal
     st["track_record"] = journal.track_record()
     st["seed_state"] = SEED["state"]
+    if "signals" not in st:
+        st["signals"] = []
+    if "overview" not in st:
+        st["overview"] = _OVERVIEW_CACHE.get("data") or []
     return jsonify(st)
 
 
 @app.route("/api/signals")
 def api_signals():
+    """Fast: serve cached signals from last tick (never run full scan per request)."""
     _ensure_seeding()
-    return jsonify({"signals": _scan_only(), "seed_state": SEED["state"]})
+    last = _load_last()
+    return jsonify({"signals": last.get("signals", []), "seed_state": SEED["state"],
+                    "when": last.get("when", "")})
 
 
 @app.route("/api/overview")
 def api_overview():
     _ensure_seeding()
-    return jsonify({"overview": _overview(), "seed_state": SEED["state"]})
+    last = _load_last()
+    ov = last.get("overview") or _OVERVIEW_CACHE.get("data") or []
+    return jsonify({"overview": ov, "seed_state": SEED["state"]})
 
 
 @app.route("/api/journal")
@@ -565,8 +587,7 @@ def _run_and_cache_inner(refresh: bool) -> dict:
 def _run_and_cache(refresh: bool) -> dict:
     """Run one engine tick (scan, trade, learn), cache results for the dashboard."""
     if not _live_tick_lock.acquire(blocking=False):
-        return {"status": "busy", "seed_state": SEED["state"],
-                "when": _load_last().get("when", ""), "signals": _scan_only()}
+        return _load_last()
     try:
         return _run_and_cache_inner(refresh)
     finally:

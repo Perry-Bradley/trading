@@ -27,12 +27,17 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   const [when, setWhen] = useState<string>("");
   const [busy, setBusy] = useState<string | null>(null);
 
+  const [apiErr, setApiErr] = useState<string | null>(null);
+
   const poll = useCallback(async () => {
     try {
       const s = await api.status();
       setSeed(s.seed_state || "ready");
       setWhen(s.when || "");
-    } catch { /* ignore */ }
+      setApiErr(null);
+    } catch {
+      setApiErr("Cannot reach API — set API_URL on this Railway service");
+    }
   }, []);
 
   useEffect(() => {
@@ -111,7 +116,14 @@ export default function Shell({ children }: { children: React.ReactNode }) {
           <nav className="lg:hidden flex gap-1.5 px-4 pb-2.5 overflow-x-auto scroll-x">{<NavLinks />}</nav>
         </div>
 
-        {warming && (
+        {apiErr && (
+          <div className="mx-4 sm:mx-6 mt-4 p-3 rounded-xl bg-down/5 border border-down/30 text-down text-sm">
+            {apiErr}. On the <b>web/dashboard</b> Railway service set:{" "}
+            <code className="bg-canvas px-1 rounded">API_URL=https://web-production-6447a.up.railway.app</code>
+          </div>
+        )}
+
+        {warming && !apiErr && (
           <div className="mx-4 sm:mx-6 mt-4 p-3 rounded-xl bg-warn/5 border border-warn/30 text-warn text-sm">
             {seed.startsWith("error")
               ? `Seeding error: ${seed.replace("error:", "").trim()} — press "Refresh + tick".`
