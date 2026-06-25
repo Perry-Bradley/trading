@@ -75,6 +75,8 @@ def _seed() -> None:
             OnlinePolicy.bootstrap(TARGET_R)
         SEED["state"] = "ready"
         print("[seed] ready")
+        from src.data.sources import finnhub_ws
+        finnhub_ws.start_background()
         threading.Thread(target=_post_seed_tick, daemon=True, name="seed-tick").start()
     except Exception as e:  # noqa: BLE001
         SEED["state"] = f"error: {e}"
@@ -530,6 +532,14 @@ def _overview() -> list:
         except Exception:  # noqa: BLE001
             out.append({"pair": pr, "bias": "flat", "price": 0.0, "signal": False})
     _OVERVIEW_CACHE.update(t=time.time(), data=out)
+    try:
+        from src.data.sources import finnhub_ws
+        for row in out:
+            q = finnhub_ws.live_quote(row["pair"])
+            if q is not None:
+                row["price"] = q
+    except Exception:  # noqa: BLE001
+        pass
     return out
 
 
@@ -664,9 +674,8 @@ def api_tick():
 # Strategy:
 #   FAST thread  – updates Binance (BTC) and Deriv (V100, V25) every 60 s.
 #                  No API key required, no rate limits. These stream immediately.
-#   SLOW thread  – cycles through all TwelveData forex pairs one-by-one,
-#                  waiting 8 s between each call (free tier: 8 req/min).
-#                  A full forex rotation completes in ~2 min.
+#   SLOW thread  – Finnhub REST refresh for forex (60 calls/min free tier).
+#                  One pair + one TF per cycle; live forming bars via WebSocket.
 #   After every data update the engine tick + signal scan runs so the
 #   dashboard reflects the freshest data without any user interaction.
 # ---------------------------------------------------------------------------
@@ -680,7 +689,7 @@ _LIVE_PAIRS = {  # pairs grouped by their data source
 
 
 def _get_live_groups():
-    """Split config.PAIRS into fast (Binance/Deriv) and slow (TwelveData)."""
+    """Split config.PAIRS into fast (Binance/Deriv) and slow (Finnhub forex)."""
     from src.data.fetch import source_for
     fast, slow = [], []
     for pr in config.PAIRS:
@@ -735,18 +744,14 @@ def _fast_updater() -> None:
 
 
 def _slow_updater() -> None:
-    """Thread: cycles through TwelveData forex pairs one-by-one (8 req/min limit).
-    
-    Each pair needs ~4 TF calls × 8 s gap = 32 s per pair.
-    All 11 forex pairs complete in ~6 min. Data is always < 6 min stale.
-    """
+    """Thread: Finnhub REST refresh for forex — WebSocket handles live forming bars."""
     # Wait for initial seed
     for _ in range(180):
         if _seeded():
             break
         time.sleep(5)
     _, slow = _get_live_groups()
-    print(f"[slow-updater] forex pairs: {slow} — cycling at 8 req/min (TwelveData)")
+    print(f"[slow-updater] forex pairs: {slow} — REST refresh + Finnhub WebSocket live")
     idx = 0
     tf_cycle = ["M30", "H1", "H4", BIAS_TF]
     while True:
@@ -765,7 +770,7 @@ def _slow_updater() -> None:
         _live_tick()
         print(f"[slow-updater] updated {pr} {tf}")
         idx += 1
-        time.sleep(max(32, 8 * 4))
+        time.sleep(15)  # Finnhub REST: 60/min — one call per 15s is safe
 
 
 def _scheduler() -> None:
@@ -822,17 +827,17 @@ def api_data():
             else:
                 tfs[tf] = None
         src = _fetch.source_for(pr)
-        live = src in ("binance", "twelvedata", "deriv")
+        live = src in ("binance", "finnhub", "deriv")
         rows.append({"pair": pr, "tf": tfs, "source": src, "live": live})
     out = {"pairs": rows, "timeframes": list(config.TIMEFRAMES),
            "ladder": "D1->H4->H1->M30",
-           "source": "binance (crypto) · twelvedata (forex) · deriv (V100/V25)",
+           "source": "binance (crypto) · finnhub WS+REST (forex) · deriv (V100/V25)",
            "seed_state": SEED["state"]}
     try:
-        from src.data.sources import twelvedata as _td
-        out["twelvedata"] = _td.pool_status()
+        from src.data.sources import finnhub_ws
+        out["finnhub"] = finnhub_ws.status()
     except Exception:  # noqa: BLE001
-        out["twelvedata"] = None
+        out["finnhub"] = None
     _DATA_CACHE.update(t=time.time(), data=out)
     return jsonify(out)
 
@@ -1054,9 +1059,10 @@ _start_scheduler()   # begin autonomous ticking (set TICK_INTERVAL=0 to disable)
 
 # Log data-source status at boot (helps Railway debugging — never prints the key).
 try:
-    from src.data.sources import twelvedata as _td
-    _ps = _td.pool_status()
-    print(f"[boot] data sources: binance=BTCUSD | deriv=V100,V25 | twelvedata={_ps['active']}/{_ps['configured']} keys active")
+    from src.data.sources import finnhub as _fh
+    from src.data.sources import finnhub_ws as _fhw
+    _fh_ok = _fh.available()
+    print(f"[boot] data sources: binance=BTCUSD | deriv=V100,V25 | finnhub={'ON' if _fh_ok else 'OFF (set FINNHUB_KEY)'}")
     print(f"[boot] DATA_DIR={config.DATA_DIR}")
 except Exception as _e:  # noqa: BLE001
     print(f"[boot] source check failed: {_e}")

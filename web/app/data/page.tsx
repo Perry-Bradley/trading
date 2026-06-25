@@ -20,38 +20,39 @@ export default function DataPage() {
         detectors, backtester and model all read from.
       </p>
 
-      {d?.twelvedata && (
-        <Section title="TwelveData API keys" right={
-          <span className={`text-xs font-medium ${d.twelvedata.active > 0 ? "text-up" : "text-down"}`}>
-            {d.twelvedata.active}/{d.twelvedata.configured} active
+      {d?.finnhub && (
+        <Section title="Finnhub live stream" right={
+          <span className={`text-xs font-medium ${d.finnhub.connected ? "text-up" : "text-down"}`}>
+            {d.finnhub.connected ? "WebSocket connected" : "WebSocket offline"}
           </span>
         }>
           <p className="text-sub text-sm mb-3">
-            Forex uses TwelveData REST (800 credits/day per free key). Add fallbacks on the API service:
-            {" "}<code className="bg-canvas px-1 rounded text-xs">TWELVEDATA_KEYS=key2,key3,key4,key5</code>
-            {" "}or <code className="bg-canvas px-1 rounded text-xs">TWELVEDATA_KEY_2</code> … <code className="bg-canvas px-1 rounded text-xs">_5</code>.
-            Keys rotate automatically when one hits daily or per-minute limits.
+            Forex/gold uses <b>Finnhub WebSocket</b> for live ticks (forming candles + dashboard prices)
+            and <b>REST</b> for historical analysis. Set{" "}
+            <code className="bg-canvas px-1 rounded text-xs">FINNHUB_KEY</code> on the API service.
           </p>
-          {d.twelvedata.active === 0 && (
-            <p className="text-down text-sm mb-2">All keys exhausted — dashboard forex data will freeze until UTC midnight or you add a fresh key.</p>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-sm mb-3">
+            <div><span className="text-sub text-xs">Trades received</span><div className="font-semibold">{d.finnhub.trades.toLocaleString()}</div></div>
+            <div><span className="text-sub text-xs">Last tick</span><div className="font-mono text-xs">{d.finnhub.last_trade || "—"}</div></div>
+          </div>
+          {d.finnhub.last_error && !d.finnhub.connected && (
+            <p className="text-down text-sm mb-2">{d.finnhub.last_error}</p>
           )}
-          <ul className="text-sm space-y-1.5">
-            {d.twelvedata.keys.map((k) => (
-              <li key={k.id} className="flex items-center justify-between py-1 border-b border-line/50">
-                <span className="font-mono text-xs">{k.id}</span>
-                <span className={k.active ? "text-up text-xs" : "text-down text-xs"}>
-                  {k.active ? `${k.ok} ok` : k.cooldown_until ? `cooldown ${k.cooldown_until}` : "exhausted"}
-                  {k.last_error && !k.active && <span className="text-sub ml-2 truncate max-w-[200px] inline-block align-bottom">{k.last_error}</span>}
-                </span>
-              </li>
-            ))}
-          </ul>
+          {Object.keys(d.finnhub.quotes || {}).length > 0 && (
+            <ul className="text-sm space-y-1">
+              {Object.entries(d.finnhub.quotes).map(([p, px]) => (
+                <li key={p} className="flex justify-between font-mono text-xs py-0.5">
+                  <span>{p}</span><span>{px}</span>
+                </li>
+              ))}
+            </ul>
+          )}
         </Section>
       )}
 
       {d && d.pairs.some((p) => !p.live) && (
         <div className="p-3 rounded-xl bg-warn/5 border border-warn/30 text-warn text-sm">
-          Forex needs <code className="bg-canvas px-1 rounded">TWELVEDATA_KEY</code> on the API service.
+          Forex needs <code className="bg-canvas px-1 rounded">FINNHUB_KEY</code> on the API service.
           Crypto uses Binance; V100/V25 use Deriv — both live with no extra key.
         </div>
       )}

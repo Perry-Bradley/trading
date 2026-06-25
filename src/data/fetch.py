@@ -3,7 +3,7 @@
 Routing:
   BTCUSD     -> Binance (real-time, no key)
   V100, V25  -> Deriv WebSocket
-  Forex/XAU  -> Twelve Data (requires TWELVEDATA_KEY)
+  Forex/XAU  -> Finnhub REST + WebSocket (requires FINNHUB_KEY)
 
 Data is saved as parquet under data/<PAIR>_<TIMEFRAME>.parquet.
 """
@@ -47,7 +47,7 @@ def source_for(pair: str) -> str:
         return "binance"
     if pair in ("V100", "V25"):
         return "deriv"
-    return "twelvedata"
+    return "finnhub"
 
 
 def fetch(pair: str, timeframe: str) -> pd.DataFrame:
@@ -64,8 +64,8 @@ def fetch(pair: str, timeframe: str) -> pd.DataFrame:
         from src.data.sources import deriv_data
         return _sanitize(deriv_data.fetch_ohlcv(pair, timeframe))
 
-    from src.data.sources import twelvedata
-    return _sanitize(twelvedata.fetch_ohlcv(pair, timeframe))
+    from src.data.sources import finnhub
+    return _sanitize(finnhub.fetch_ohlcv(pair, timeframe))
 
 
 def save(pair: str, timeframe: str) -> pd.DataFrame:

@@ -100,11 +100,13 @@ export type DataInfo = {
   ladder: string;
   source: string;
   seed_state?: string;
-  twelvedata?: {
-    configured: number;
-    active: number;
-    exhausted: number;
-    keys: { id: string; active: boolean; ok: number; fail: number; last_error?: string | null; cooldown_until?: string | null }[];
+  finnhub?: {
+    running: boolean;
+    connected: boolean;
+    trades: number;
+    last_trade?: string | null;
+    last_error?: string | null;
+    quotes: Record<string, number>;
   };
 };
 
