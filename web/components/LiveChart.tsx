@@ -13,6 +13,7 @@ import {
   type UTCTimestamp,
 } from "lightweight-charts";
 import { api, type Candle } from "@/lib/api";
+import { subscribeLivePrice, type LiveMode } from "@/lib/live";
 import type { Signal, Analysis } from "@/lib/types";
 
 // Seconds per bar — used to bucket live ticks into the current forming candle.
@@ -62,6 +63,7 @@ export function LiveChart({
   const priceLinesRef = useRef<IPriceLine[]>([]);
   const liveLineRef = useRef<IPriceLine | null>(null);
   const [live, setLive] = useState<number | null>(null);
+  const [liveMode, setLiveMode] = useState<LiveMode>("poll");
   const [err, setErr] = useState<string | null>(null);
   const [staleFuture, setStaleFuture] = useState(false);
   const [legend, setLegend] = useState<{ obs: number; bbs: number; fvgs: number; snr: number; sweeps: number; qms: number } | null>(null);
@@ -136,41 +138,37 @@ export function LiveChart({
     return () => { alive = false; clearInterval(histTimer); };
   }, [pair, tf]);
 
-  // Poll the live WS quote every 2s and extend the forming candle in real time.
+  // Live price via the shared SSE stream (server pushes on every tick change);
+  // falls back to 2s polling automatically if the stream can't connect.
   useEffect(() => {
-    let alive = true;
     const step = TF_SECONDS[tf] ?? 1800;
-    const poll = async () => {
-      try {
-        const { price } = await api.live(pair);
-        if (!alive || price == null || !seriesRef.current) return;
-        setLive(price);
-        // Always-on live price line — shows the real-time level even if the
-        // candle bars lag or are clock-skewed (so the chart is never "dead").
-        const series = seriesRef.current;
-        if (liveLineRef.current) { try { series.removePriceLine(liveLineRef.current); } catch { /* gone */ } }
-        liveLineRef.current = series.createPriceLine({
-          price, color: "#e6edf3", lineWidth: 1, lineStyle: LineStyle.Dotted,
-          axisLabelVisible: true, title: "LIVE",
-        });
-        const nowSec = Math.floor(Date.now() / 1000);
-        const barStart = (Math.floor(nowSec / step) * step) as UTCTimestamp;
-        const last = lastBarRef.current;
-        let bar: CandlestickData;
-        if (last && (last.time as number) === barStart) {
-          bar = { time: barStart, open: last.open, high: Math.max(last.high, price), low: Math.min(last.low, price), close: price };
-        } else if (last && barStart > (last.time as number)) {
-          bar = { time: barStart, open: price, high: price, low: price, close: price };
-        } else { return; }
-        seriesRef.current.update(bar);
-        lastBarRef.current = bar;
-      } catch { /* transient */ }
+    const onPrice = (price: number, mode: LiveMode) => {
+      if (!seriesRef.current) return;
+      setLive(price);
+      setLiveMode(mode);
+      // Always-on live price line — shows the real-time level even if the
+      // candle bars lag or are clock-skewed (so the chart is never "dead").
+      const series = seriesRef.current;
+      if (liveLineRef.current) { try { series.removePriceLine(liveLineRef.current); } catch { /* gone */ } }
+      liveLineRef.current = series.createPriceLine({
+        price, color: "#e6edf3", lineWidth: 1, lineStyle: LineStyle.Dotted,
+        axisLabelVisible: true, title: "LIVE",
+      });
+      const nowSec = Math.floor(Date.now() / 1000);
+      const barStart = (Math.floor(nowSec / step) * step) as UTCTimestamp;
+      const last = lastBarRef.current;
+      let bar: CandlestickData;
+      if (last && (last.time as number) === barStart) {
+        bar = { time: barStart, open: last.open, high: Math.max(last.high, price), low: Math.min(last.low, price), close: price };
+      } else if (last && barStart > (last.time as number)) {
+        bar = { time: barStart, open: price, high: price, low: price, close: price };
+      } else { return; }
+      seriesRef.current.update(bar);
+      lastBarRef.current = bar;
     };
-    const liveTimer = setInterval(poll, 2000);
-    poll();
+    const unsubscribe = subscribeLivePrice(pair, onPrice);
     return () => {
-      alive = false;
-      clearInterval(liveTimer);
+      unsubscribe();
       if (liveLineRef.current && seriesRef.current) {
         try { seriesRef.current.removePriceLine(liveLineRef.current); } catch { /* gone */ }
         liveLineRef.current = null;
@@ -282,7 +280,8 @@ export function LiveChart({
     <div className="w-full rounded-xl border border-line overflow-hidden bg-[#131722]">
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-line">
         <span className="text-xs text-sub">
-          {pair} · {tf} · <span className="text-ink">live</span> · Finnhub WebSocket
+          {pair} · {tf} · <span className="text-ink">live</span> ·{" "}
+          {liveMode === "push" ? "SSE push" : "polling"} · Finnhub WebSocket
           {signal?.entry != null && <span className="text-brand"> · signal overlay</span>}
         </span>
         {live != null && <span className="font-mono text-xs text-ink">{live.toFixed(precision)}</span>}

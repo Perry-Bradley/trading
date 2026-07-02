@@ -23,7 +23,19 @@ async function proxy(req: NextRequest, path: string[]) {
   }
   const res = await fetch(url, init);
   const ct = res.headers.get("content-type") || "application/json";
-  if (ct.includes("image") || ct.includes("octet-stream")) {
+  // SSE must be streamed through, never buffered (await res.text() would hang forever).
+  if (ct.includes("text/event-stream")) {
+    return new NextResponse(res.body, {
+      status: res.status,
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no",
+      },
+    });
+  }
+  if (ct.includes("image") || ct.includes("octet-stream") || ct.includes("gzip")) {
     return new NextResponse(await res.arrayBuffer(), {
       status: res.status,
       headers: { "Content-Type": ct, "Cache-Control": "no-store" },

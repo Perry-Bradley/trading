@@ -1,7 +1,10 @@
 [build]
 builder = "nixpacks"
 
+# NOTE: this startCommand OVERRIDES the Procfile on Railway — keep them in sync.
+# 1 process (= 1 Finnhub WS connection) + gthread so requests never block behind
+# background work; 16 threads leaves headroom for long-lived SSE streams.
 [deploy]
-startCommand = "python -m gunicorn -b 0.0.0.0:$PORT src.webapp.app:app --timeout 300 --workers 1"
+startCommand = "python -m gunicorn -b 0.0.0.0:$PORT src.webapp.app:app --timeout 300 --workers 1 --worker-class gthread --threads 16"
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 5

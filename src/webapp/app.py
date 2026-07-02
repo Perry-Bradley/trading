@@ -62,6 +62,13 @@ def _seed() -> None:
     try:
         from src.data import fetch
         from src.ml.online import OnlinePolicy
+        # Fast path: restore a pre-seeded snapshot (SNAPSHOT_URL) instead of
+        # backfilling every pair/TF through TwelveData's rate limits.
+        try:
+            from src.data import snapshot
+            snapshot.restore_if_empty()
+        except Exception as e:  # noqa: BLE001
+            print(f"  (seed snapshot restore failed: {e})")
         # Fetch all timeframes needed: bias TF + entry TFs (H4, H1, M30)
         entry_tfs = ["H4", "H1", "M30"]
         for pr in config.PAIRS:
@@ -1061,6 +1068,8 @@ _ANALYSIS_CACHE = {}
 def api_analysis():
     """SMC analysis for a pair: bias, structure breaks (BOS/CHoCH), fresh SNR,
     order blocks, fair value gaps, and liquidity sweeps (BSL/SSL) — with levels."""
+    import pandas as pd
+
     pair = request.args.get("pair", config.PAIRS[0])
     tf = request.args.get("tf", TF)
     if not _seeded():
@@ -1071,7 +1080,6 @@ def api_analysis():
     tf_hours = {"M30": 0.5, "H1": 1, "H4": 4, "D1": 24}.get(tf, 4)
     try:
         if data_path.exists():
-            import pandas as pd
             last_ts = pd.read_parquet(data_path, columns=["close"]).index.max()
             age_h = (_dt.datetime.utcnow() - pd.Timestamp(last_ts).to_pydatetime()).total_seconds() / 3600
             if age_h > tf_hours * 1.2:
@@ -1323,6 +1331,67 @@ def api_live():
                         "last_trade": st.get("last_trade")})
     except Exception as e:  # noqa: BLE001
         return jsonify({"error": str(e), "quotes": {}}), 200
+
+
+@app.route("/api/snapshot")
+def api_snapshot():
+    """Download the full data snapshot (parquets + models + paper state) as
+    tar.gz — host it and set SNAPSHOT_URL on a fresh deploy to skip cold-start."""
+    from src.data import snapshot
+    buf = snapshot.pack()
+    return send_file(buf, mimetype="application/gzip", as_attachment=True,
+                     download_name="msnr_snapshot.tar.gz")
+
+
+# ---------------------------------------------------------------------------
+# SSE live-push: one stream carries ALL live quotes so the browser needs a
+# single connection instead of polling /api/live every 2s per chart.
+# Each stream holds a gunicorn thread, so cap concurrency — over the cap we
+# return 503 and the frontend silently falls back to polling.
+# ---------------------------------------------------------------------------
+_SSE_MAX_CLIENTS = 6
+_sse_slots = threading.Semaphore(_SSE_MAX_CLIENTS)
+
+
+@app.route("/api/stream")
+def api_stream():
+    """Server-Sent Events: pushes {quotes, connected} ~1/s (only on change)."""
+    from flask import Response, stream_with_context
+
+    if not _sse_slots.acquire(blocking=False):
+        return jsonify({"error": "too many live streams — poll /api/live instead"}), 503
+
+    def _gen():
+        try:
+            from src.data.sources import finnhub_ws
+            last_payload = None
+            last_sent = 0.0
+            while True:
+                try:
+                    st = finnhub_ws.status()
+                    payload = json.dumps({
+                        "quotes": st.get("quotes", {}),
+                        "connected": st.get("connected", False),
+                        "last_trade": st.get("last_trade"),
+                    }, sort_keys=True)
+                except Exception as e:  # noqa: BLE001
+                    payload = json.dumps({"quotes": {}, "connected": False, "error": str(e)[:80]})
+                now = time.time()
+                if payload != last_payload:
+                    yield f"event: quotes\ndata: {payload}\n\n"
+                    last_payload, last_sent = payload, now
+                elif now - last_sent > 15:
+                    yield ": keepalive\n\n"   # comment frame — keeps proxies from timing out
+                    last_sent = now
+                time.sleep(1.0)
+        finally:
+            _sse_slots.release()
+
+    resp = Response(stream_with_context(_gen()), mimetype="text/event-stream")
+    resp.headers["Cache-Control"] = "no-cache"
+    resp.headers["X-Accel-Buffering"] = "no"   # disable proxy buffering
+    resp.headers["Connection"] = "keep-alive"
+    return resp
 
 
 # Kept LAST so every @app.route above is registered before the dev server blocks here
